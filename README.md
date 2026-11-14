@@ -11,7 +11,7 @@
 |---|---|---|
 | **`render_riso.py`** | **主力出图**：孔版印刷风格贴图引擎，1242×1656 满幅。九种版式自动轮转（错版巨字、半调网点、胶带、引文、大数字…），纸感颗粒 | Pillow + Chrome |
 | `dazi_kit.py` | 3:4 竖版大字报贴图渲染库，字号红线与对比度红线内置为断言 | Pillow |
-| `gen_cards.py` | 长文 draft → 900×1200 竖版贴图卡组（自动拆卡）。**轻量版**：不依赖 Chrome，视觉也比 riso 朴素一档 | Pillow |
+| `gen_cards.py` | 长文 draft → 900×1200 竖版**图卡组**（自动拆卡）。**轻量版**：不依赖 Chrome，视觉也比 riso 朴素一档。注意这不是 greenbook 渠道的「贴图」，见「渠道差异」 | Pillow |
 | `gen_diagram.py` | 步骤 / 对比 / 清单 / 阶段 四版式公众号**长文配图**（inside article，不是贴图） | Pillow |
 | `annotate_shot.py` | 截图标注：红框 / 箭头 / 圆圈 / 序号 | Pillow |
 | `check.py` | 产出图体检：字号、对比度、体积、比例、序号、水印 | Pillow |
@@ -55,7 +55,7 @@ export GZH_IMAGE_KIT_FONT_BOLD=/path/to/SourceHanSansSC-Bold.otf
 `examples/cards/`（gen_cards 六张）、`examples/diagram.png`（步骤配图）。
 **先看样张再动手**——这个工具的价值全在视觉上，光看参数看不出差别。
 
-## 五条常用命令
+## 六条常用命令
 
 ```bash
 # 1. 一套贴图（主力，1242×1656，九种版式自动轮转）
@@ -72,13 +72,23 @@ python gen_diagram.py --mode steps --title "三分钟出一套图" \
   --data "$(cat steps.json)" --style mint --out out/steps.png
 
 # 4. 出完整组图后体检（比例、体积上下限、序号连续、右下角水印）
+#    --images 收目录或单张 PNG；单文件点查自动跳过组级检查（张数/序号/跨图水印）
 python check.py --images out/riso/ --channel greenbook
 
 # 5. 查渲染脚本里的字号与文字色对比度
 python check.py --card-fonts render_riso.py
+
+# 6. 截图标注（红框 / 箭头 / 圆圈 / 序号）
+python annotate_shot.py --in shot.png --out out/shot_anno.png \
+  --items '[{"type":"rect","box":[120,260,500,320]},
+            {"type":"arrow","frm":[600,300],"to":[510,300]},
+            {"type":"label","text":"这行是关键","at":[610,290]}]'
 ```
 
 `--out` 指向不存在的目录会自动创建，不用先 mkdir。
+
+`dazi_kit.py` / `fontkit.py` / `channels.py` 是库（无 CLI），被上述脚本引用；
+`dazi_kit` 把字号红线与对比度红线内置为断言，可用 `check.py --card-fonts` 静态体检。
 
 `examples/` 里有完整可复现的输入与产出（含 6 张样张），
 每条命令都能照着跑一遍——见 `examples/README.md`。
@@ -209,9 +219,10 @@ Chrome 路径用环境变量 `CHROME_PATH` 或 `--chrome` 指定，脚本也会�
 - **判据全文**：`docs/配图标准.md`——字号红线换算公式、对比度阈值、断行规则、
   配色跟随封面、六条视觉机制。代码里每条守卫都能在这里找到依据。
 - **效果样张**：`examples/`（可复现，命令都在 `examples/README.md`）。
-- **渠道差异**：`check.py --images <目录>` 默认走通用体检；
+- **渠道差异**：`check.py --images <目录或单张 PNG>` 默认走通用体检；
   加 `--channel greenbook`（别名 `贴图` / `小绿书`）走贴图渠道硬闸。
-  代码渲染的图卡不适用于该渠道，`gen_cards.py` / `gen_diagram.py` 会直接拒绝。
+  代码渲染的图卡不适用于该渠道，`gen_cards.py` / `gen_diagram.py` 生成前就会直接拒绝；
+  已经生成的卡组误喂给 greenbook 硬闸时，报错会一次说清两条出路（换 render_riso 出插画，或走通用体检）。
 - **教程与实例**：微信公众号「**AI澎**」，后台回复「**贴图**」获取最新版与示例。
 - **代码托管**：GitHub `ai-pengpeng/gzh-image-kit`（主仓）｜Gitee `ai-pengpeng/gzh-image-kit`（国内镜像）
 

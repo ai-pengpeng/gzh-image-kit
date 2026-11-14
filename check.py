@@ -191,6 +191,26 @@ GENERIC_MAX_KB = 10 * 1024
 GENERIC_MIN_KB = 20
 
 
+def _collect_pngs(path):
+    """--images 同时收目录与单张 PNG（2026-11-14 修，试用实测撞过单文件报「目录不存在」）。
+
+    返回 (files, single, err)。single=True 时调用方跳过组级检查
+    （张数下限 / 序号连续 / 跨图水印交集）——单文件点查时这些是噪音。
+    """
+    path = os.path.normpath(path) if path else path
+    if os.path.isfile(path):
+        if not path.lower().endswith(".png"):
+            return [], True, "只支持 PNG 单文件：%s" % path
+        return [path], True, None
+    if os.path.isdir(path):
+        import glob as _glob
+        files = sorted(_glob.glob(os.path.join(path, "*.png")))
+        return files, False, None
+    if path.lower().endswith(".png"):
+        return [], True, "图片文件不存在：%s" % path
+    return [], False, "图片目录不存在：%s" % path
+
+
 def _count_mint(im):
     """统计薄荷绿品牌色 #4ECDC4 的占比（降采样提速）。
     采用色相带检测：插画实际渲染的是「高饱和薄荷绿 #4ECDC4 ↔ 柔和灰薄荷」
@@ -540,15 +560,18 @@ def audit_figure_hue(cover, figs):
 
 def check_greenbook_images(image_dir):
     """贴图（小绿书）硬闸：禁止代码卡片图、单图 ≤1.5MB、3:4 竖版、张数 ≥6、序号连续、#4ECDC4 品牌色。"""
-    import glob as _glob
     from PIL import Image as _Image
 
     errors, warns = [], []
-    if not os.path.isdir(image_dir):
-        return ["贴图目录不存在：%s" % image_dir], [], []
-    files = sorted(_glob.glob(os.path.join(image_dir, "*.png")))
+    files, single, err = _collect_pngs(image_dir)
+    if err:
+        return [err], [], []
     if not files:
-        return ["贴图目录 %s 下没有 PNG 文件" % image_dir], [], []
+        return ["%s 下没有 PNG 文件" % image_dir], [], []
+    # 卡组身份（gen_cards 产物带 meta.json）：体积下限判「疑似代码卡」必然命中——
+    # 它本来就是代码卡。闸不放行（greenbook 正典 = 生图插画），但报错要说清出路。
+    _card_set = (not single) and os.path.isfile(os.path.join(image_dir, "meta.json"))
+    _card_hint_done = False
 
     print("🔍 贴图硬闸（greenbook）：%s  （%d 张）" % (image_dir, len(files)))
     for f in files:
@@ -564,10 +587,22 @@ def check_greenbook_images(image_dir):
             continue
         # 1) 代码卡片图检测（硬错误）：生图模型出的插画 ≥150KB，代码卡仅 30–60KB
         if size_kb < GREENBOOK_MIN_KB:
-            errors.append(
-                "%s 仅 %.0fKB（%dx%d）—— 疑似代码卡片图（gen_diagram / gen_cards），"
-                "本渠道禁用！需要生图模型出的 AI 插画（单图 ≥150KB）。"
-                % (name, size_kb, w, h))
+            if _card_set:
+                if not _card_hint_done:
+                    _card_hint_done = True
+                    errors.append(
+                        "检出 gen_cards 图卡组（代码卡，目录含 meta.json），greenbook 贴图正典"
+                        "是生图插画（单图 ≥150KB），代码卡禁入本闸。两条出路："
+                        "① 要发贴图 → 用 render_riso 出插画再过闸；"
+                        "② 当长文配图/卡组用 → 去掉 --channel 走通用体检复检。"
+                        "不达标的卡：")
+                errors.append("  %s 仅 %.0fKB（%dx%d）< %dKB"
+                              % (name, size_kb, w, h, GREENBOOK_MIN_KB))
+            else:
+                errors.append(
+                    "%s 仅 %.0fKB（%dx%d）—— 疑似代码卡片图（gen_diagram / gen_cards），"
+                    "本渠道禁用！需要生图模型出的 AI 插画（单图 ≥150KB）。"
+                    % (name, size_kb, w, h))
         # 1b) 单图体积上限（硬错误，2026-10-15 补）：微信贴图单图 ≤1.5MB
         elif size_kb > GREENBOOK_MAX_KB:
             errors.append(
@@ -586,7 +621,10 @@ def check_greenbook_images(image_dir):
                          % (name, mint * 100))
         else:
             print("  ✅ %s  薄荷绿 #4ECDC4 占比 %.2f%%" % (name, mint * 100))
-    # 4) 张数（软/硬，2026-10-15 补）：不满 6 张不许发
+    # 4) 张数（软/硬，2026-10-15 补）：不满 6 张不许发。单文件点查跳过组级检查。
+    if single:
+        print("  ℹ️ 单文件模式：跳过组级检查（张数 / 序号 / 跨图水印）")
+        return errors, warns, []
     if len(files) < GREENBOOK_MIN_COUNT:
         errors.append("贴图仅 %d 张 < %d 张下限（正典：不满 6 张不许发，算法推荐极低）"
                       % (len(files), GREENBOOK_MIN_COUNT))
@@ -659,15 +697,14 @@ def check_images_generic(image_dir):
 
     比例、序号、水印三段逻辑与 greenbook 档同源，改一处两边一起变。
     """
-    import glob as _glob
     from PIL import Image as _Image
 
     errors, warns = [], []
-    if not os.path.isdir(image_dir):
-        return ["图片目录不存在：%s" % image_dir], [], []
-    files = sorted(_glob.glob(os.path.join(image_dir, "*.png")))
+    files, single, err = _collect_pngs(image_dir)
+    if err:
+        return [err], [], []
     if not files:
-        return ["图片目录 %s 下没有 PNG 文件" % image_dir], [], []
+        return ["%s 下没有 PNG 文件" % image_dir], [], []
 
     print("🔍 图片组通用体检：%s  （%d 张）" % (image_dir, len(files)))
     for f in files:
@@ -693,6 +730,9 @@ def check_images_generic(image_dir):
         else:
             print("  ✅ %s  %dx%d  %.0fKB" % (name, w, h, size_kb))
 
+    if single:
+        print("  ℹ️ 单文件模式：跳过组级检查（张数建议 / 序号 / 跨图水印）")
+        return errors, warns, []
     if len(files) < 3:
         warns.append("只有 %d 张图；长文正文配图建议 3–5 张（拉停留时长）" % len(files))
 
@@ -1288,9 +1328,9 @@ def main():
                     help="渠道：greenbook（贴图/小绿书，别名 贴图、小绿书）；"
                          "不传 = 通用长文口径。该参数真正参与 --images 的分派")
     ap.add_argument("--images", default="",
-                    help="图片目录。配合 --channel greenbook 走贴图硬闸"
+                    help="图片目录或单张 PNG。配合 --channel greenbook 走贴图硬闸"
                          "（体积下限/3:4/张数/品牌绿/水印）；不传 channel 走通用体检"
-                         "（比例/体积上下限/序号连续/水印交集）")
+                         "（比例/体积上下限/序号连续/水印交集）。单文件点查跳过组级检查")
     ap.add_argument("--fig-hue", default="",
                     help="配图配色体检：空格分隔的图片路径，第一个是封面，其余是正文配图。"
                          "查配图主色相是否跟随封面（偏差 ≤30°）。")

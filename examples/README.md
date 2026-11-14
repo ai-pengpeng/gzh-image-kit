@@ -3,6 +3,10 @@
 这里的图全部由本仓库的脚本生成，输入是 `sample_draft.md` 与 `steps_data.json`。
 **可复现**：照下面的命令重跑，出来的图应该和仓库里这几张一致（字体不同会略有差异）。
 
+> **样张字体溯源（2026-11-14 确认）**：全部样张用 **NotoSansSC-VF**（SIL OFL，可再分发）渲染，
+> `cards/meta.json` 的 `font_file` 字段记录了这一点；当天用 `GZH_IMAGE_KIT_FONT_REG/BOLD`
+> 钉死该字体重出一遍，与仓库样张**字节级一致**——合规性是实证，不是推断。
+
 > **⚠ 照抄命令前先看这一句：`--out` 不要写 `examples/`。**
 > 下面所有命令的 `--out` 都已经写成 `out/xxx/`，是**故意**的——
 > `examples/` 里的图是官方样张，写进去就覆盖了，而且**没有任何提示**，
@@ -48,12 +52,12 @@ python gen_diagram.py \
   --foot "每一步都能单独重跑，不用从头再来" \
   --data "$(cat examples/steps_data.json)" \
   --style mint \
-  --out examples/diagram.png
+  --out out/diagram.png
 ```
 
 | 文件 | 规格 | 看什么 |
 |---|---|---|
-| `diagram.png` | 1080×2188 | 五步纵向排列，底部一句结论（`--foot`）收口 |
+| `diagram.png`（仓库样张在 `examples/diagram.png`，命令输出到 `out/`） | 1080×2188 | 五步纵向排列，底部一句结论（`--foot`）收口 |
 
 ## 出完图要体检
 
