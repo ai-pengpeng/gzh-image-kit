@@ -37,7 +37,9 @@
 - 附带修复：`check.py` 原本在导入时 `from app.core.spec import CARD_MIN`（内部产线依赖），开源副本必然 ImportError，会导致 `--help` 崩溃；已用 try/except 退回中性默认 6，其余逻辑不动。
 - 改动范围：仅 `<repo>/` 目录内文件；未触碰用户指定的其它目录与当前工作目录里的原文件。
 
-## 账号信息（推送目标）
+## 账号信息（推送目标）— 2026-11-14 14:45 改名全部完成
 
-- GitHub：`ai-pengpeng`（改名自 old-account，进行中）
-- Gitee 镜像：`ai-pengpeng`（改名自 old-account，进行中）
+- GitHub：`ai-pengpeng`（改名自 old-account ✅ 已生效，旧 URL 90 天自动重定向；代码推送进行中，网络断续由后台任务重试）
+- Gitee 镜像：`ai-pengpeng`（改名自 old-account ✅ 已生效，2026-11-14 14:40 用户完成；旧地址 10 分钟后释放）
+- 双端远端地址均已指向 `ai-pengpeng/gzh-image-kit`，Gitee 匿名访问 200、`git ls-remote` 通过、与本地 `2eabc6c` 同步
+- 凭据文件 `<credentials-file>` 旧用户名已更新；README 镜像链接与新地址一致
