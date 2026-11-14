@@ -34,6 +34,8 @@ from pathlib import Path
 OK, WARN, BAD = "✅", "⚠️ ", "❌"
 
 TROUBLE = []
+# 不阻塞出图、但必须在结论里说一句的事（现在只有一条：字体是本机碰巧有的）。
+NOTES = []
 
 
 def say(mark: str, title: str, detail: str = "", fix: str = "") -> None:
@@ -125,11 +127,22 @@ def check_font() -> None:
         bold = fontkit.font_info(True)
     except Exception as e:
         msg = str(e)
-        if "环境变量" in msg:
-            say(BAD, "字体环境变量指向的文件不存在", detail=msg.split("已经找过")[0].strip())
+        # 按「环境变量到底设没设」判病因，**不要按报错正文里的关键词判**：
+        # 「三档都没命中」那段正文里本来就有「已经找过：环境变量 → …」几个字，
+        # 用关键词判会让「一个中文字体都没有」的机器被误诊成「环境变量写错了」。
+        # 2026-11-14 干净机器实测撞出来的：没设任何变量，却报「变量指向的文件不存在」。
+        env_set = [k for k in (fontkit.ENV_REG, fontkit.ENV_BOLD)
+                   if (os.environ.get(k) or "").strip()]
+        head, sep, tail = msg.partition("去哪儿弄")
+        if env_set:
+            say(BAD, "字体环境变量指向的文件不存在", detail=head.strip(),
+                fix="把 %s 改成真实存在的文件绝对路径；或清掉这个变量"
+                    "（Windows：set %s=　/macOS·Linux：unset %s），"
+                    "让脚本按三档自动查找。" % ("、".join(env_set), env_set[0], env_set[0]))
         else:
-            say(BAD, "找不到可用的中文字体", detail="这是新用户最容易卡住的一关，别慌，三条路都能通。")
-        print(msg.split("已经找过，三档都没命中。")[-1] if "去哪儿弄" in msg else msg)
+            say(BAD, "找不到可用的中文字体",
+                detail="这是新用户最容易卡住的一关，别慌，下面三条路都能通。")
+        print(msg if not sep else "去哪儿弄" + tail)
         print()
         return
 
@@ -144,10 +157,12 @@ def check_font() -> None:
         say(WARN, "字体：免费商用字体（不是开源）", detail=reg["name"],
             fix="自己用没问题。要把图给别人复现、或做商业项目，建议换成开源字体\n"
                 "（思源黑体 / Noto Sans SC，SIL OFL 1.1，见下文）。")
+        NOTES.append("字体用的是本机「%s」，换台机器重跑字形会变" % reg["name"])
     elif tier == "system":
         say(WARN, "字体：本机系统自带", detail=reg["name"],
             fix="自己用没问题，但别人下载这个仓库后**不一定有你这份字体**，\n"
                 "出图效果会跟着变。想稳定复现就换开源字体（见下文）。")
+        NOTES.append("字体用的是本机「%s」，换台机器重跑字形会变" % reg["name"])
 
     if reg["path"] != (bold["path"] if bold else ""):
         print("     常规：%s" % reg["path"])
@@ -215,6 +230,15 @@ def main() -> int:
         print("      照上面 → 后面那几行做，做完重跑 `python doctor.py`。")
         return 1
     print("结论：环境没问题，可以直接出图。")
+    if NOTES:
+        # 「没问题」这四个字太容易让人只读第一行就走。
+        # 能出图 ≠ 出的图和作者一样：字体是本机碰巧有的，换台机器字形就变。
+        # 这句话必须出现在结论里，而不是只藏在上面那一大段里——
+        # 2026-11-14 新人实测：他第一遍就是只看结论、没读字体段。
+        print("      但有一件事要知道：%s。" % "；".join(NOTES))
+        print("      自己用无所谓；要把图发给别人复现、或换台电脑重跑，"
+              "按上面「字体」那段装一款开源字体更稳。")
+    print()
     print()
     print("下一步：")
     print("  python render_riso.py --spec examples/cards_riso.json --out out/riso/")

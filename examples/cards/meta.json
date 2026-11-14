@@ -3,7 +3,7 @@
   "tag": "工具箱",
   "benefit": "长文没人读得完，贴图能把核心结论顶到读者眼前",
   "benefit_auto": true,
-  "account": "你的号名",
+  "account": "图卡工具箱",
   "keywords": [
     "贴图",
     "字号",
@@ -21,6 +21,6 @@
     "card_06.png"
   ],
   "source_draft": "examples/sample_draft.md",
-  "generated_at": "2026-11-14T16:22:50+08:00",
+  "generated_at": "2026-11-14T20:06:57+08:00",
   "font_file": "NotoSansSC-VF.ttf"
 }

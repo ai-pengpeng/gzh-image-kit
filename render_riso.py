@@ -37,12 +37,13 @@ import re
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 from PIL import Image
 
-from fontkit import resolve_font, resolve_font_family
+from fontkit import FontNotFoundError, resolve_font, resolve_font_family
 
 # ---------------------------------------------------------------- 画布与油墨
 
@@ -287,11 +288,53 @@ def print_layouts() -> None:
         print("| `%s` | %s | %s |" % (v, name, cells))
     print()
     print("`hero` 支持用 `\\n` 手动指定断点：横向版式断行、`r1` 竖排断**列**（从右往左读）。")
+    print("`tag` / `head` / `hero` 是硬必填——表里打 ✓ 就代表这款版式真要用它，")
+    print("缺一个就一张图都不出，并且一次把每张缺什么都报出来（不是出完才崩）。")
     print("`points` / `caption` 进的是同一块收口区：有 points 出要点，没有才退回 caption。")
+    print("`badge` 是封面左下角那枚张数徽章里的字（默认显示「N 张」，配了就换掉），只有 r1 用。")
     print("题签颜色是有意的层级：`r1` 封面用朱红（全套唯一强调色），内页一律灰——")
     print("内页要收敛，让巨字当主角。不是不统一。")
     print("`subdir` 是 `render_cards.py`（另一款卡片引擎）的输出子目录，本引擎不读；")
     print("同一个 cards.json 被两个引擎共用，所以它合法。")
+
+
+# 渲染时直接取值、缺了就会崩（或出一张白卡）的字段。其余字段都走安全取值。
+# 判据不在这个元组里，而是「LAYOUTS 表里打了 ✓」——表说这款版式要用它，
+# 那就得真给，否则等于承诺了却做不到。
+HARD_FIELDS = ("tag", "head", "hero")
+
+_HARD_WHY = {
+    "tag": "题签是这款版式的组成部分（封面最上那行小字），空着这块就塌了",
+    "head": "每款版式都靠 head 定标题层级",
+    "hero": "hero 是整张图的视觉主体，缺了就是一张白卡",
+}
+
+
+def check_required(cards: list[dict]) -> list[str]:
+    """必填字段体检。返回【致命】问题，有就一张图都不出。
+
+    为什么单独一层，而不是让它崩：
+    原来 `head` / `tag` 是直接下标取的，缺了在渲染时抛 `KeyError: 'tag'` —
+    一整屏英文栈，指向源码行号，用户只看到「程序崩了」，看不出
+    「第几张、缺哪个字段、这款版式为什么非要它」。
+    2026-11-14 外部实测：一个只读文档的人撞上这条，只能靠猜键名才解开。
+
+    一次报全所有卡的缺失，不让人改一处跑一次。
+    """
+    out = []
+    for i, c in enumerate(cards, 1):
+        v = c.get("v") or VARIANT_ORDER[i % len(VARIANT_ORDER) - 1]
+        if v not in LAYOUTS:
+            continue                      # 版式名写错由 check_spec_fields 报
+        name, uses = LAYOUTS[v]
+        miss = [f for f in HARD_FIELDS
+                if f in uses and not str(c.get(f) or "").strip()]
+        if not miss:
+            continue
+        why = "；".join(_HARD_WHY[f] for f in miss)
+        out.append("第 %d 张（%s %s）：缺少 %s —— %s"
+                   % (i, v, name, "、".join(miss), why))
+    return out
 
 
 def check_spec_fields(cards: list[dict], spec: dict | None = None) -> list[str]:
@@ -339,10 +382,8 @@ def check_spec_fields(cards: list[dict], spec: dict | None = None) -> list[str]:
                                % (i + 1, c["idx"], i + 1))
             except (TypeError, ValueError):
                 out.append("第 %d 张：idx 应该是整数，现在是 %r" % (i + 1, c["idx"]))
-        if not (c.get("hero") or "").strip():
-            out.append("第 %d 张（%s %s）：缺少 hero —— 每张都要有一句大字，"
-                       "它是版式的视觉主体；这张会渲出一片空白"
-                       % (i + 1, v, LAYOUTS[v][0]))
+        # 缺 hero / head / tag 不在这里报——那是**致命**的，由 check_required 统一处理，
+        # 两个地方都查会让「到底哪个才算错」出现第二套口径。
     for fields, idxs in sorted(unused_any.items()):
         out.append("（提示）第 %s 张配了 %s，这几款版式不显示它——不影响出图，"
                    "想确认某款用哪些字段看 `--print-layouts`"
@@ -763,7 +804,10 @@ def r5_quote(c: dict) -> str:
 <div class="card">
   {crop_marks()}
   <div class="r5-flow">
-    <div class="r5-mark">“</div>
+    <div class="r5-mark"><svg width="132" height="86" viewBox="0 0 132 86">
+      <path d="M56 0 C25 0 0 25 0 56 L0 86 L26 86 L26 60 C26 41 37 30 56 30 Z" fill="#E8422E"/>
+      <path d="M124 0 C93 0 68 25 68 56 L68 86 L94 86 L94 60 C94 41 105 30 124 30 Z" fill="#E8422E"/>
+    </svg></div>
     <div class="r5-head">{c['head']}</div>
     <div class="r5-quote">{quote_html}</div>
     <div class="r5-rule"></div>
@@ -842,8 +886,21 @@ def r9_end(c: dict) -> str:
     """
     # 收尾页也是「一行大字」，一样要认 \n：2026-11-14 外部实测发现 r9 吞换行，
     # 「只读第一行\n知道下周干嘛吗」被挤成一行、字号被压小，反而比两行更难看。
-    rows_t = [r for r in (hero_of(c) or "").split("\n") if r] or [c.get("hero", "")]
-    fs = fit(max(rows_t, key=len), 980, 158)
+    rows_t = [r.strip() for r in (hero_of(c) or "").split("\n") if r.strip()] or [""]
+    # 收尾页只有一条硬要求：这句大字必须真的比 head 大。
+    # 一行塞不下时，按标点断成两三行，而不是把字号一路压下去——
+    # 2026-11-14 外部实测：25 字不写 \n 时 hero 被压到 36px，比 head 的 70px 小一半，
+    # 层级倒挂、下方三分之二全空，看着像排版坏了；而且它**不报错**，一路 [ok] 出图。
+    # 断行器复用 cap_lines（同一套标点禁则），不另写一份。
+    if len(rows_t) == 1 and fit(rows_t[0], 980, 158) < 100:
+        for per_row in (9, 11, 14, 18):
+            cand = cap_lines(rows_t[0], per_row, min_last=2).split("<br>")
+            if len(cand) <= 4:
+                rows_t = cand
+                break
+        else:
+            rows_t = cap_lines(rows_t[0], 18, min_last=2).split("<br>")
+    fs = min(fit(r, 980, 158) for r in rows_t)
     hero_html = "".join(f'<div style="font-size:{fs}px">{r}</div>' for r in rows_t)
     return f"""
 <div class="card">
@@ -997,7 +1054,13 @@ body{background:#fff;-webkit-font-smoothing:antialiased}
 
 /* ---- r5 大引文 ---- */
 .r5-flow{position:absolute;left:76px;top:150px;width:1088px;display:flex;flex-direction:column}
-.r5-mark{font-family:var(--f-title);font-size:200px;line-height:.62;color:#E8422E;opacity:.9;margin-bottom:26px}
+/* 引号用 SVG 画的，不用字体字形。
+   原来这里是 <div class="r5-mark">“</div> + font-size:200px：同一份配置，
+   装了 Noto 的机器出卷曲「66」，只装微软雅黑的机器出两道斜直杠
+   （2026-11-14 干净机器实测，放大图一眼差一档）。
+   装饰元素是版式的一部分、不是文案，不该跟着字体变。画出来之后谁看都一样。 */
+.r5-mark{height:86px;margin-bottom:30px}
+.r5-mark svg{display:block}
 .r5-head{font-size:44px;letter-spacing:8px;color:#E8422E;margin-bottom:34px}
 .r5-quote{font-family:var(--f-title);font-weight:700;color:#111111;
   line-height:1.42;letter-spacing:2px;margin-bottom:64px}
@@ -1180,15 +1243,34 @@ def main():
     global CHROME
     CHROME = resolve_chrome(a.chrome)
     # 渲染前硬校验：找不到可用中文字体就抛清晰异常，绝不带着错字体出图。
-    resolve_font(False)
-    resolve_font(True)
+    # 但**别把 traceback 甩给用户**：fontkit 已经把「三档都找过 + 去哪下 + 怎么装」
+    # 写进异常正文了，外面再套一层 12 行 Python 调用栈，只会把那段指引挤到屏幕外。
+    # 2026-11-14 干净机器实测：指引在栈底，用户第一眼看到的是 Traceback。
+    try:
+        resolve_font(False)
+        resolve_font(True)
+    except FontNotFoundError as e:
+        sys.stderr.write("\n[!] 出不了图：%s\n" % e)
+        sys.stderr.write("[!] 装好字体后重跑同一条命令即可，不用改任何配置。\n\n")
+        sys.exit(2)
 
     spec = json.loads(Path(a.spec).read_text(encoding="utf-8"))
     cards = spec["cards"]
     name = spec.get("theme", "cards")
     # 品牌串必须在 build_html 之前定下来：mast/folio 在拼 HTML 时就把 _BRAND 用掉了。
     apply_brand(spec, a.brand)
-    # 字段体检要在渲染前：字段被静默丢弃时，用户看图只会以为「工具就长这样」，
+    # 必填体检放在最前面，且**有错就不出图**。
+    # 为什么不「跳过那张继续出」：整组是拼成一张长图一次截图的，跳过一张
+    # 页码和「N / 总数」就全错位；让人改完 json 重跑一次，比出一套里缺一张强。
+    fatal = check_required(cards)
+    if fatal:
+        for e in fatal:
+            print("[!] " + e)
+        print("\n[!] 以上 %d 处必填字段没写，已停止出图（没有生成任何文件）。" % len(fatal))
+        print("    补上再跑一次即可；每款版式到底需要哪些字段看："
+              " python render_riso.py --print-layouts")
+        sys.exit(1)
+    # 字段体检放在渲染前：字段被静默丢弃时，用户看图只会以为「工具就长这样」，
     # 不会想到是自己写错了字段名或选错了版式。
     for w in check_spec_fields(cards, spec):
         # 提示 ≠ 警告：真正的错（字段不认识、缺 hero、idx 对不上）用 [!]，

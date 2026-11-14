@@ -288,7 +288,8 @@ def _emit_notice(label: str, lic: str, path: str, no_bold: bool) -> None:
         "    图能出，但建议换一款开源中文字体——免费商用，换台机器也能出一样的图：\n"
         "      下载 %s（页面右上 Download family）\n"
         "      解压后双击 .ttf 安装即可，脚本下次自动认出来，不用配环境变量。\n"
-        "      完整步骤看 `python doctor.py`。\n" % (label, lic, path, _NOTO_URL))
+        "      国内打不开：Gitee 搜「思源黑体」或「Noto Sans SC」，有镜像（认准 SIL OFL）。\n"
+        "      还有别的下载源 / 想排查环境：`python doctor.py`。\n" % (label, lic, path, _NOTO_URL))
     if no_bold:
         sys.stderr.write(
             "    ⚠ 这份字体没有配对的粗体文件：标题会用常规字重，看起来会偏细。\n"
@@ -308,8 +309,11 @@ def _find_font_ex(bold: bool) -> tuple:
             return env_val, "env", os.path.basename(env_val)
         raise FontNotFoundError(
             "环境变量 %s 指向的字体文件不存在：%s\n"
-            "请改成真实存在的字体文件绝对路径，或执行 `unset %s` 让脚本自动查找。\n\n%s"
-            % (env_name, env_val, env_name, _DOWNLOAD_HINT))
+            "请改成真实存在的字体文件绝对路径，或清掉这个变量让脚本自动查找：\n"
+            "  Windows PowerShell：Remove-Item Env:%s\n"
+            "  Windows cmd       ：set %s=\n"
+            "  macOS / Linux     ：unset %s\n\n%s"
+            % (env_name, env_val, env_name, env_name, env_name, _DOWNLOAD_HINT))
 
     # 一档：本机已装的中文字体（开源 / 免费商用两类，都只在本机渲染）
     files = _scan_font_files()
