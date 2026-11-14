@@ -28,7 +28,7 @@ gen_cards.py —— 长文 → 公众号贴图（竖版卡组）自动拆卡器
   尾卡        → 号名 + 合集 pill + 引导语 + 话题标签
 
 用法：
-  python gen_cards.py --in draft.md --out cards/ --tag "AI实操" --account "AI澎"
+  python gen_cards.py --in draft.md --out cards/ --tag "AI实操" --account "你的号名"
   可选：--cover-title "8字内主标题" --style ocean|mint --keywords "元宝,微信AI"
 
 依赖：pillow；中文字体由 fontkit.resolve_font 统一解析（见 README「字体配置与许可」）
@@ -423,7 +423,7 @@ def draw_tail_card(img, dr, st, account, collection, keywords, tip):
 
 # ---------------------------------------------------------------- 主流程
 def build_cards(md: str, out_dir: str, *, style="ocean", cover_title="",
-                tag="", account="AI澎", keywords=None, benefit="", tip="",
+                tag="", account="图卡工具箱", keywords=None, benefit="", tip="",
                 quote_keywords=None):
     global d
     st = STYLES[style]
@@ -475,7 +475,7 @@ def main():
     ap.add_argument("--cover-title", default="", help="首卡主标题（≤8 字最优，默认自动截取）")
     ap.add_argument("--tag", default="", help="首卡类别 pill，如 AI实操")
     ap.add_argument("--benefit", default="", help="首卡利益点一句，如 全程免费 10分钟上手")
-    ap.add_argument("--account", default="AI澎", help="号名（页脚/尾卡）")
+    ap.add_argument("--account", default="图卡工具箱", help="号名（页脚/尾卡）")
     ap.add_argument("--keywords", default="", help="逗号分隔关键词，进卡面底部参与 OCR 检索")
     ap.add_argument("--tip", default="", help="尾卡一句引导语")
     ap.add_argument("--quote-keywords", default="",

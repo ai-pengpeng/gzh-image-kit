@@ -269,11 +269,15 @@ def crop_marks() -> str:
 # 而实际只有 3 张 —— 读者以为缺页。这里改成读取本次实际张数。
 _TOTAL = 9
 
+# 页脚/刊头品牌串：开源版默认中性，使用者可用环境变量注入自己的号名。
+# （不许硬编码具体账号名——开源副本带品牌名 = 脱敏漏检。）
+_BRAND = os.environ.get("GZH_IMAGE_KIT_BRAND", "图卡工具箱")
+
 
 def folio(no: int, total: int | None = None) -> str:
     """页脚页码，杂志式，右下。total 默认取本次实际张数。"""
     total = _TOTAL if total is None else total
-    return f'<div class="folio">AI 澎 · {no:02d} / {total:02d}</div>'
+    return f'<div class="folio">{_BRAND} · {no:02d} / {total:02d}</div>'
 
 
 def halftone(cls: str, style: str = "") -> str:
@@ -297,7 +301,7 @@ def r1_cover(c: dict) -> str:
     return f"""
 <div class="card">
   {crop_marks()}
-  <div class="mast">AI 澎 · 图文卡</div>
+  <div class="mast">{_BRAND} · 图文卡</div>
   <div class="r1-no">NO. 01</div>
   <div class="r1-left">
     <div class="r1-kick">{c['tag']}</div>
@@ -456,7 +460,7 @@ def r9_end(c: dict) -> str:
     """收尾：一行大字 + 一枚朱红圆点，剩的全留白。
 
     2026-11-11 删掉原来右下角的 560px 网点圆：它的圆心压着页码，
-    「AI 澎 · 04 / 04」直接印在网点上。收尾页的设计本来就是留白，
+    「页码 04 / 04」直接印在网点上。收尾页的设计本来就是留白，
     这块网点既与文字相交、又不承载信息，按 §10.6 判据（去掉后信息量不变）直接去掉。
     """
     fs = fit(c["hero"], 980, 158)
@@ -507,12 +511,12 @@ body{background:#fff;-webkit-font-smoothing:antialiased}
 .ht{position:absolute;background-image:radial-gradient(circle,#E8422E 2.2px,transparent 2.3px);background-size:11px 11px}
 /* 内页收口区：要点（能照着做）+ 朱红短线 + 一句收口
    宽度必须给右下页码让位（2026-11-09 踩到）：folio 从 x≈1038 起，
-   foot 若仍写 1046，收口句会直接压在「AI 澎 · 07 / 09」上，两串字叠在一起。
+   foot 若仍写 1046，收口句会直接压在页码「·· · 07 / 09」上，两串字叠在一起。
    收窄到 900 后 caption 自然折行，宁可两行也别压页码。
 
    **垂直也要让位（2026-11-11 补）**：原来 foot bottom:118、folio bottom:62，
    收口句末行底边 1538、页码顶边 1544 —— 只差 6px，放大看没问题，
-   缩到手机尺寸就成了「只能聊天，价值少一半。AI 澎 · 03 / 07」一句话。
+   缩到手机尺寸就成了「只能聊天，价值少一半。页码 03 / 07」连成一句话。
    间距要按**缩放后**的观感留，不是按 1:1 截图留。
    现在：foot 底 1486 / 页码 1510–1560 / 青条 1596，三段各留 24–36px。 */
 .foot{position:absolute;left:80px;bottom:170px;width:1040px}
@@ -704,7 +708,7 @@ def build_html(cards: list[dict]) -> str:
     _guard_decor(body, cards)
     # 页码按实际位置重写：各版式里 folio() 的数字是写死的（r2→2、r5→5…），
     # 一旦显式指定版式（v 字段）就会印错页，读者以为缺页。
-    body = [re.sub(r'(<div class="folio">AI 澎 · )\d{2}', rf'\g<1>{i+1:02d}', h)
+    body = [re.sub(r'(<div class="folio">[^<]*· )\d{2}', rf'\g<1>{i+1:02d}', h)
             for i, h in enumerate(body)]
     font_stack = ", ".join("'%s'" % f for f in resolve_font_family()) + ", sans-serif"
     css = CSS.replace("__GZH_FONT_STACK__", font_stack)
