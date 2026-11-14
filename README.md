@@ -78,10 +78,22 @@ python check.py --card-fonts gen_cards.py
 2. 不设环境变量时，`fontkit.py` 会在常见系统字体目录里查找上述开源字体；
    找不到就抛 `FontNotFoundError`。
 
-`render_riso.py` 通过 Chrome + CSS 渲染，另用 `GZH_IMAGE_KIT_FONT_FAMILY`
-（逗号分隔，如 `Source Han Sans SC,Noto Sans CJK SC`）指定 CSS 字体族候选，
-同样先做字体文件硬校验。Chrome 路径用环境变量 `CHROME_PATH` 或 `--chrome`
-指定，脚本也会自动查找常见安装路径，找不到抛清晰异常。
+`render_riso.py` 通过 Chrome + CSS 渲染，字体走两条路，按顺序试：
+
+1. **CSS 字体族**：`GZH_IMAGE_KIT_FONT_FAMILY`（逗号分隔，如 `Source Han Sans SC,Noto Sans CJK SC`），
+   渲染前实测 Chrome 到底有没有用上它；几个族里有一个能用就用那一个，用不上的从字体栈里剔除
+   （留着会让同一张图混排两种字形）。
+2. **字体文件直注**：系统里一个族都没装、但 `fontkit` 能找到字体文件时，脚本自己生成
+   `@font-face` 把文件喂给 Chrome，不要求「字体已注册成系统字体」。
+
+> 第 2 条是 2026-11-14 补的。原来的逻辑是「族名找不到就拒绝出图」——听着更安全，实际把
+> 一大批机器堵死在第一步：**字体文件在（PIL 排得出字），但没注册成系统字体族（Chrome 按
+> 族名叫不出来）**。中文 Windows 上这是常态，尤其手工拷进 `C:\Windows\Fonts` 的开源字体。
+> 两条线（PIL 按路径、Chrome 按族名）取字体的来源不同，必须能对上，否则「有字体却出不了图」。
+> 只有当**两条路都断**时才拒绝出图，红线不变：绝不静默回退成别的字体。
+
+Chrome 路径用环境变量 `CHROME_PATH` 或 `--chrome` 指定，脚本也会自动查找常见安装路径，
+找不到抛清晰异常。
 
 字体许可由使用者自行负责：请确认所选字体的许可证允许你的使用场景，并按需
 在产出物中附上字体许可声明。

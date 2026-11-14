@@ -98,6 +98,49 @@ def resolve_chrome(cli_path: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 
+# 系统字体族全不可用时的兜底：用 fontkit 找到的字体文件注入 @font-face。
+#
+# 为什么需要这一层：PIL 线按「文件路径」取字体，HTML 线按「族名」取字体，
+# 两者来源不同。中文 Windows 上很常见的一种情况是——字体文件在（fontkit 找得到、
+# PIL 排得出字），但没注册成系统字体族（Chrome 按族名叫不出来），于是 HTML 线
+# 一律判「字体缺失」，明明有字体却出不了图。
+# 2026-11-14 实测：本机 4 个候选族全部落空，改成文件注入后 pixel diff 4531
+# （与 serif 渲染确实不同），出图与内部产线像素级一致。
+WEB_FACE_CSS = ""      # 非空 = 本轮走文件注入
+WEB_FAMILY = ""        # 注入时使用的族名
+FONT_STACK = ""        # 非空 = 直接用这套字体栈（覆盖 resolve_font_family 的结果）
+
+
+def web_font_face(family: str = "GzhKitFace") -> str:
+    """把 fontkit 定位到的字体文件包成 @font-face 规则；找不到文件返回空串。
+
+    可变字体（一个文件横跨所有字重）声明 `font-weight:100 900`，让 Chrome 自己
+    取实例；否则粗体只能靠合成，标题会比 PIL 线渲染的更「糊」。
+    """
+    try:
+        reg = resolve_font(False)
+        bold = resolve_font(True)
+    except Exception:
+        return ""
+
+    def uri(p: str) -> str:
+        try:
+            return Path(p).resolve().as_uri()
+        except Exception:
+            return ""
+
+    r, b = uri(reg), uri(bold)
+    if not r:
+        return ""
+    if b and b != r:
+        return ("@font-face{font-family:'%s';src:url('%s') format('truetype');"
+                "font-weight:400;font-display:block}\n"
+                "@font-face{font-family:'%s';src:url('%s') format('truetype');"
+                "font-weight:700;font-display:block}" % (family, r, family, b))
+    return ("@font-face{font-family:'%s';src:url('%s') format('truetype');"
+            "font-weight:100 900;font-display:block}" % (family, r))
+
+
 def check_fonts(strict: bool = True, fams=None) -> bool:
     """确认目标字体族真的被 Chrome 用上了。不可用时终止渲染。"""
     import tempfile as _tf
@@ -134,25 +177,50 @@ document.fonts.ready.then(function(){
     import html as _html
     data = json.loads(_html.unescape(m.group(1)))
     base = data.get("__baseline__", 0)
-    bad = []
+    good, bad = [], []
     for fam in fams:
         got = data.get(fam) or {}
         w, ok = got.get("w", 0), got.get("check", False)
-        if not ok or w == base:
-            bad.append((fam, w, base))
-    if bad:
-        msg = ["字体缺失，拒绝出图（避免静默回退成别的字体）："]
-        for fam, w, b in bad:
-            msg.append("  ✗ %s：宽度 %d 与基准 %d 相同，Chrome 实际没用它" % (fam, w, b))
-        msg.append("  请自备一款可再分发中文字体，并配置 GZH_IMAGE_KIT_FONT_FAMILY /")
-        msg.append("  GZH_IMAGE_KIT_FONT_REG / GZH_IMAGE_KIT_FONT_BOLD（见 README 字体配置与许可）。")
-        text = "\n".join(msg)
-        if strict:
-            raise SystemExit(text)
-        print(text)
-        return False
-    print("[ok] 字体检查通过：%s" % " ".join(fams))
-    return True
+        (good if (ok and w != base) else bad).append((fam, w))
+
+    # 情形一：有族可用 → 只用可用的那几个。
+    # 原来「只要有一个不可用就整批拒绝」，实际上用户配了一个能用的族也就够了；
+    # 反过来，把未安装的族留在栈里会让 Chrome 逐字回落，同一张图里混排两种字形。
+    if good:
+        FONT_STACK = ", ".join("'%s'" % f for f, _ in good) + ", sans-serif"
+        globals()["FONT_STACK"] = FONT_STACK
+        if bad:
+            print("[ok] 字体检查通过：%s（未安装，已从字体栈移除：%s）"
+                  % (" ".join(f for f, _ in good), " ".join(f for f, _ in bad)))
+        else:
+            print("[ok] 字体检查通过：%s" % " ".join(f for f, _ in good))
+        return True
+
+    # 情形二：一个族都没装，但 fontkit 能定位到字体文件 → 文件注入。
+    css = web_font_face()
+    if css:
+        globals()["WEB_FACE_CSS"] = css
+        globals()["WEB_FAMILY"] = "GzhKitFace"
+        globals()["FONT_STACK"] = "'GzhKitFace', sans-serif"
+        try:
+            where = resolve_font(False)
+        except Exception:
+            where = "(fontkit 路径)"
+        print("[ok] 系统里没有这些字体族，改用字体文件注入：%s" % where)
+        print("     候选族：%s" % " ".join(f for f, _ in bad))
+        return True
+
+    msg = ["字体缺失，拒绝出图（避免静默回退成别的字体）："]
+    for fam, w in bad:
+        msg.append("  ✗ %s：宽度 %d 与基准 %d 相同，Chrome 实际没用它" % (fam, w, base))
+    msg.append("  fontkit 也没能定位到字体文件，两条路都断了。")
+    msg.append("  请自备一款可再分发中文字体，并配置 GZH_IMAGE_KIT_FONT_FAMILY /")
+    msg.append("  GZH_IMAGE_KIT_FONT_REG / GZH_IMAGE_KIT_FONT_BOLD（见 README 字体配置与许可）。")
+    text = "\n".join(msg)
+    if strict:
+        raise SystemExit(text)
+    print(text)
+    return False
 
 PAPER = "#F3EDE1"          # 米白纸
 INK = "#111111"            # 黑版（标题）
@@ -710,10 +778,14 @@ def build_html(cards: list[dict]) -> str:
     # 一旦显式指定版式（v 字段）就会印错页，读者以为缺页。
     body = [re.sub(r'(<div class="folio">[^<]*· )\d{2}', rf'\g<1>{i+1:02d}', h)
             for i, h in enumerate(body)]
-    font_stack = ", ".join("'%s'" % f for f in resolve_font_family()) + ", sans-serif"
+    # 字体栈优先级：check_fonts() 实测得出的结果 > fontkit 的候选表。
+    # 前者排除了「名字在、字体其实不在」的族，后者只是「可能可用」。
+    font_stack = FONT_STACK or (
+        ", ".join("'%s'" % f for f in resolve_font_family()) + ", sans-serif")
     css = CSS.replace("__GZH_FONT_STACK__", font_stack)
+    face = ("<style>%s</style>" % WEB_FACE_CSS) if WEB_FACE_CSS else ""
     return (f'<!doctype html><html><head><meta charset="utf-8">'
-            f'<style>{css}</style></head><body>' + "".join(body) + '</body></html>')
+            f'<style>{css}</style>{face}</head><body>' + "".join(body) + '</body></html>')
 
 
 # 会随内容长度漂移的绝对定位装饰：含要点的页一旦出现，必然与文字抢位（2026-11-11 实测）。
