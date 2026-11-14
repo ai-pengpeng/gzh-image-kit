@@ -64,7 +64,7 @@ python gen_diagram.py --help
 ## 更多
 
 - **教程与实例**：微信公众号「**AI澎**」，后台回复「**贴图**」获取最新版与示例。
-- **Gitee 镜像**（国内访问更稳）：建设中。
+- **代码托管**：GitHub `ai-pengpeng/gzh-image-kit`（主仓）｜Gitee `ai-pengpeng/gzh-image-kit`（国内镜像）
 
 ## License
 
