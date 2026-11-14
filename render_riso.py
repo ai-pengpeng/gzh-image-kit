@@ -22,8 +22,7 @@
 
 用法
 ----
-    python tools/render_riso.py --spec 内容/20261109-五篇/01-xxx/cards.json \
-        --out "D:/待发布-贴图/20261109/01"
+    python render_riso.py --spec cards.json --out out/riso/
 
 依赖 / 产物
 -----------
@@ -36,34 +35,75 @@ import argparse
 import json
 import re
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 from PIL import Image
 
+from fontkit import resolve_font, resolve_font_family
+
 # ---------------------------------------------------------------- 画布与油墨
 
 W, H = 1242, 1656          # 3:4，check.py 的 GREENBOOK_RATIO 要求，别改
-CHROME = r"C:/Program Files/Google/Chrome/Application/chrome.exe"
+
+# Chrome 路径在 main() 里按「--chrome / CHROME_PATH / 常见路径」解析后赋值。
+# import 阶段不查找，保证 --help 不受运行环境限制。
+CHROME = ""
+
+
+def resolve_chrome(cli_path: str = "") -> str:
+    """按 --chrome / 环境变量 CHROME_PATH / 常见安装路径 / PATH 查找 Chrome。
+
+    找不到就抛清晰异常，绝不带着空路径去截图（那只会得到一句含糊的失败）。
+    """
+    candidates = []
+    if cli_path:
+        candidates.append(cli_path)
+    env_path = os.environ.get("CHROME_PATH", "").strip().strip('"').strip("'")
+    if env_path:
+        candidates.append(env_path)
+    local = os.environ.get("LOCALAPPDATA", "")
+    candidates += [
+        "C:/Program Files/Google/Chrome/Application/chrome.exe",
+        "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+        os.path.join(local, "Google", "Chrome", "Application", "chrome.exe") if local else "",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+    ]
+    for name in ("chrome", "google-chrome", "google-chrome-stable",
+                 "chromium", "chromium-browser"):
+        found = shutil.which(name)
+        if found:
+            candidates.append(found)
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+    raise RuntimeError(
+        "找不到 Chrome/Chromium 可执行文件。请通过环境变量 CHROME_PATH 或 --chrome "
+        "指定其绝对路径，或安装 Chrome / Chromium 后重试。"
+        "已尝试常见安装路径与 PATH 查找。")
 
 # ---------------------------------------------------------------------------
-# 字体守卫（2026-11-11）
-# 为什么需要：字体统一到 MiSans 之后，新的风险是「换一台机器没装 MiSans」。
-# 那时 Chrome 会静默回退到雅黑或宋体，出图不报错、只是变了个样——比字号错更难发现，
-# 因为图是「能出」的。字号有数、字体没数，所以只能实测。
-# 检测方法：同一段拉丁字用 MiSans 和「一个不存在的字体名」各量一次宽度，
-# 不存在的字体名必然回退到 sans-serif，若两者宽度相等 = MiSans 没加载。
-# 实测值（本机）：MiSans 628 / YaHei 647 / 不存在 601——差异足够大。
+# 字体守卫
+# 为什么需要：换一台机器没装目标字体时，Chrome 会静默回退到系统默认字体，
+# 出图不报错、只是变了个样——比字号错更难发现，因为图是「能出」的。
+# 检测方法：同一段拉丁字用目标字体族和「一个不存在的字体名」各量一次宽度，
+# 不存在的字体名必然回退到 sans-serif，若两者宽度相等 = 目标字体没加载。
+# 要检查的字体族由 fontkit.resolve_font_family() 提供（可由环境变量配置）。
 # ---------------------------------------------------------------------------
-FONT_FAMS = ["MiSans"]        # 渲染依赖的字体族，加一个就多测一个
 
 
-def check_fonts(strict: bool = True) -> bool:
-    """确认 FONT_FAMS 里的字体真的被 Chrome 用上了。不可用时终止渲染。"""
+def check_fonts(strict: bool = True, fams=None) -> bool:
+    """确认目标字体族真的被 Chrome 用上了。不可用时终止渲染。"""
     import tempfile as _tf
     from pathlib import Path as _P
-    fams_js = ", ".join('"%s"' % f for f in FONT_FAMS)
+    fams = list(fams) if fams else resolve_font_family()
+    fams_js = ", ".join('"%s"' % f for f in fams)
     probe = """<!doctype html><meta charset="utf-8"><body><script>
 document.fonts.ready.then(function(){
   function w(f,t){var c=document.createElement("canvas").getContext("2d");
@@ -95,7 +135,7 @@ document.fonts.ready.then(function(){
     data = json.loads(_html.unescape(m.group(1)))
     base = data.get("__baseline__", 0)
     bad = []
-    for fam in FONT_FAMS:
+    for fam in fams:
         got = data.get(fam) or {}
         w, ok = got.get("w", 0), got.get("check", False)
         if not ok or w == base:
@@ -104,15 +144,14 @@ document.fonts.ready.then(function(){
         msg = ["字体缺失，拒绝出图（避免静默回退成别的字体）："]
         for fam, w, b in bad:
             msg.append("  ✗ %s：宽度 %d 与基准 %d 相同，Chrome 实际没用它" % (fam, w, b))
-        msg.append("  已装字体的机器上宽度应明显大于基准（本机 MiSans=628 / 基准=601）。")
-        msg.append("  装字体：把 MiSans-*.ttf 放进 %LOCALAPPDATA%\\Microsoft\\Windows\\Fonts，")
-        msg.append("  字体文件在 <kb>/字体/（MiSans-Regular/Bold/Semibold/Medium.ttf）。")
+        msg.append("  请自备一款可再分发中文字体，并配置 GZH_IMAGE_KIT_FONT_FAMILY /")
+        msg.append("  GZH_IMAGE_KIT_FONT_REG / GZH_IMAGE_KIT_FONT_BOLD（见 README 字体配置与许可）。")
         text = "\n".join(msg)
         if strict:
             raise SystemExit(text)
         print(text)
         return False
-    print("[ok] 字体检查通过：%s" % " ".join(FONT_FAMS))
+    print("[ok] 字体检查通过：%s" % " ".join(fams))
     return True
 
 PAPER = "#F3EDE1"          # 米白纸
@@ -123,9 +162,7 @@ RED = "#E8422E"            # 朱红版
 MINT = "#4ECDC4"           # 薄荷版（贴图产线品牌色，check.py 算占比）
 LEMON = "#F0C33C"          # 柠檬纸标签
 
-DISP = "'SimHei','Microsoft YaHei',sans-serif"      # 黑体，方块感，像铅字
-SERIF = "'SimSun','Noto Serif SC',serif"            # 宋体，做报头/引文
-BODY = "'Microsoft YaHei','PingFang SC',sans-serif"
+# 字体族统一由 CSS 变量 --f-title / --f-body 提供，运行时由 fontkit 配置的字体栈注入。
 
 # 九张的版式序列。改这里就改整套节奏，别在单张里硬写。
 VARIANT_ORDER = ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"]
@@ -203,7 +240,7 @@ def foot(c: dict, cls: str = "") -> str:
     历史版的内页每张承载 3-4 条可操作信息，信息密度是收藏和转发的理由；
     只放一句大字好看，但读者存它没理由。要点区就是把这个理由补回来。
 
-    **不在收口区画红线（2026-11-11 澎澎指出的问题）**：
+    **不在收口区画红线（2026-11-11 实测发现的问题）**：
     原来这里有一条 .foot-rule，而 r3/r4/r6 三个模板各自又画一条绝对定位的红线，
     同一张图上会出现两条相距十几像素的红线，看着像画歪了；绝对定位那条还会压在要点上。
     收口区的分离靠间距就够了（.pts margin-bottom 34px），线在这里没有信息量。
@@ -446,14 +483,11 @@ body{background:#fff;-webkit-font-smoothing:antialiased}
 .card{
   width:1242px;height:1656px;position:relative;overflow:hidden;
   background:#F3EDE1;color:#1a1a1a;
-  /* 字体收口（2026-11-11）：
-     原来一张卡里混着 SimSun（宋·11处）+ SimHei（黑·9处）+ YaHei（兜底），
-     三个来源两个沙箱，风格不统一。更要命的是 SimHei 只有 Regular、SimSun 没有真粗体，
-     写了 font-weight:700 全靠浏览器合成——合成粗体边缘发毛，而且换 Chrome 版本就变样，
-     出图不可复现。统一到 MiSans（本地已装、真 400/500/600/700 四档、官方免费商用）。
-     字体名写成一个变量，将来换字体只改这一行。 */
-  --f-title:'MiSans','Microsoft YaHei',sans-serif;
-  --f-body:'MiSans','Microsoft YaHei',sans-serif;
+  /* 字体收口：标题与正文共用一套字体栈，避免多来源混排、浏览器合成粗体导致
+     换 Chrome 版本就变样。字体栈由 fontkit.resolve_font_family() 在渲染前注入，
+     见 build_html()。 */
+  --f-title:__GZH_FONT_STACK__;
+  --f-body:__GZH_FONT_STACK__;
   font-family:var(--f-body);
 }
 /* 裁切十字线：印刷品的胎记 */
@@ -487,13 +521,13 @@ body{background:#fff;-webkit-font-smoothing:antialiased}
 .pt i{display:block;width:12px;height:12px;background:#E8422E;margin:17px 16px 0 0;flex:none}
 .foot-rule{display:none}   /* 2026-11-11 删除：收口区不用线，靠间距分隔 */
 /* r3 专用：收口区让到竖线右侧（left 252，与 .r3-body 同列）
-   竖线在 x=204，若收口区仍用全局 80，线会直接穿过要点文字（2026-11-11 澎澎实测）。
+   竖线在 x=204，若收口区仍用全局 80，线会直接穿过要点文字（2026-11-11 实测发现）。
    装饰线不得与内容带相交——这是栅格问题，不是调数值的问题。
    宽度 910 = 1242 − 80(右) − 252(左)：扣掉方点与缩进后约 21 字/行，
    再窄就会把「开始」这类词拆成「开 / 始」，读感断（2026-11-11 实测 756 偏窄）。 */
 .foot.r3c{left:252px;width:910px}
 .foot-cap{font-size:42px;line-height:1.65;color:#5c5c5c;max-width:740px;text-wrap:balance}
-/* text-wrap:balance（2026-11-11）：MiSans 比宋体略宽，原本刚好一行的收口句会折行，
+/* text-wrap:balance：目标字体比宋体略宽，原本刚好一行的收口句会折行，
    折出来第二行只剩「猜。」三个字，看着像没排完。balance 让两行等长。
    为什么不用缩字号：字号是红线不能动；为什么不用删字：删字是编辑决定，不该由排版倒逼。 */
 .chip{position:absolute;background:#4ECDC4}
@@ -672,8 +706,10 @@ def build_html(cards: list[dict]) -> str:
     # 一旦显式指定版式（v 字段）就会印错页，读者以为缺页。
     body = [re.sub(r'(<div class="folio">AI 澎 · )\d{2}', rf'\g<1>{i+1:02d}', h)
             for i, h in enumerate(body)]
+    font_stack = ", ".join("'%s'" % f for f in resolve_font_family()) + ", sans-serif"
+    css = CSS.replace("__GZH_FONT_STACK__", font_stack)
     return (f'<!doctype html><html><head><meta charset="utf-8">'
-            f'<style>{CSS}</style></head><body>' + "".join(body) + '</body></html>')
+            f'<style>{css}</style></head><body>' + "".join(body) + '</body></html>')
 
 
 # 会随内容长度漂移的绝对定位装饰：含要点的页一旦出现，必然与文字抢位（2026-11-11 实测）。
@@ -727,14 +763,24 @@ def main():
     ap.add_argument("--spec", required=True, help="cards.json 路径")
     ap.add_argument("--out", required=True, help="输出目录（可中文）")
     ap.add_argument("--no-grain", action="store_true")
+    ap.add_argument("--chrome", default="",
+                    help="Chrome/Chromium 可执行文件绝对路径；默认读环境变量 "
+                         "CHROME_PATH 并自动查找常见安装路径")
     a = ap.parse_args()
+
+    global CHROME
+    CHROME = resolve_chrome(a.chrome)
+    # 渲染前硬校验：找不到可用中文字体就抛清晰异常，绝不带着错字体出图。
+    resolve_font(False)
+    resolve_font(True)
 
     spec = json.loads(Path(a.spec).read_text(encoding="utf-8"))
     cards = spec["cards"]
     name = spec.get("theme", "cards")
     os.makedirs(a.out, exist_ok=True)
 
-    # 字体守卫生效点在「渲染前」：图一旦出来，字体错了只能重来
+    # 字体守卫生效点在「渲染前」：图一旦出来，字体错了只能重来。
+    # 不传 fams，由 check_fonts 现取 fontkit 配置的字体族并实测 Chrome 是否加载。
     check_fonts()
 
     tmp = tempfile.mkdtemp(prefix="riso_")

@@ -14,7 +14,7 @@ gen_diagram.py —— 公众号正文「自绘配图」通用生成器
 
 用法：
   python gen_diagram.py --mode steps --title "两步配好凭据" --out a.png \
-    --data '{"items":[{"n":"1","t":"启用 AppSecret","d":"点生成，管理员扫码"}]}'
+    --data '{"items":[{"n":"1","t":"启用配置","d":"点生成，管理员扫码"}]}'
 
   python gen_diagram.py --mode compare --title "个人号边界" --out b.png \
     --data '{"left":{"t":"能做","items":["建草稿","上传素材"]},"right":{"t":"不能","items":["直接群发"],"bad":true}}'
@@ -43,12 +43,10 @@ import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
-F_BOLD = "C:/Windows/Fonts/msyhbd.ttc"
-F_REG = "C:/Windows/Fonts/msyh.ttc"
-# 出图优先用思源黑体（Noto Sans SC，OFL 1.1）：协议不可撤销、可商用、可嵌入输出。
-# 微软雅黑只在没装思源时兜底——桌面授权不覆盖商业设计输出，商用图别用它。
-# 注意这是可变字体，默认实例是 Thin，必须显式设字重，否则整张图细得看不清。
-F_OFL = "C:/Windows/Fonts/NotoSansSC-VF.ttf"
+from fontkit import resolve_font
+
+# 字体路径由 fontkit.resolve_font 统一解析（可再分发中文字体优先，找不到即抛异常）。
+# 见模块顶部 import 与 README「字体配置与许可」。
 
 # 把文本切成「不可拆单元」：英文/数字整词一段，其余逐字符
 TOKEN = re.compile(r"[A-Za-z0-9_.\-/]+|.")
@@ -255,14 +253,14 @@ def ft(size, bold=False):
         '字号 %dpx 低于红线 %dpx（画布 %dpx ≈ 手机 12 CSS px）。\n'
         '装不下就删字，不要缩字号。判据见 本仓库/docs/配图标准.md §3.1'
         % (size, floor, CANVAS_W))
-    if os.path.exists(F_OFL):
-        try:
-            f = ImageFont.truetype(F_OFL, size)
-            f.set_variation_by_name("Bold" if bold else "Regular")
-            return f
-        except Exception:      # 变体名对不上就退回雅黑，别出一张细体图
-            pass
-    return ImageFont.truetype(F_BOLD if bold else F_REG, size)
+    # 字体由 fontkit 统一解析；找不到可用字体时它会抛异常，绝不静默退回默认字体。
+    f = ImageFont.truetype(resolve_font(bold), size)
+    # 可变字体显式设字重；非可变字体不支持该接口，忽略即可。
+    try:
+        f.set_variation_by_name("Bold" if bold else "Regular")
+    except Exception:
+        pass
+    return f
 
 
 def wrap(d, text, font, max_w):

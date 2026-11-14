@@ -11,7 +11,7 @@
   1. 标题 ≤ 64 字节（UTF-8）
   2. 正文 ≤ 20000 字符（微信上限）
   3. 无 <style> / class= / flex / grid / position:absolute|fixed / var(--x)（微信会剥）
-  4. ≥ 1 处「澎澎说」原创锚点（旧稿可能写主理人说）
+  4. ≥ 1 处原创锚点（品牌规则，默认关闭；需 --brand-rules 开启并配置关键词）
   5. HTML 里引用的本地图片真实存在
   6. 文件可读、非空
 
@@ -114,6 +114,19 @@ CTA_HINTS = ["留言", "评论区", "评论里", "发消息", "说说你", "丢�
 CAPTION_BAD_REFS = ["见第", "见上", "见下", "如前", "如后", "后文", "下文", "上文",
                     "第几节", "下文详", "前面说过"]
 
+# ── 品牌规则配置（默认关闭，仅 --brand-rules 开启时生效）────────────────────
+# 开源版默认不含任何专有栏目标记：关键词由使用者按需注入，仓库内零硬编码。
+#   GZH_CHECK_BRAND_ANCHORS  逗号分隔的「原创锚点」关键词（--min-opinion 计数用）
+#   GZH_CHECK_BRAND_ALIASES  逗号分隔的「别名 / 历史写法」关键词（出现即报错）
+#   GZH_CHECK_BRAND_CANON    唯一合法栏目名（报错提示用，可留空）
+def _env_words(name):
+    return tuple(w.strip() for w in os.environ.get(name, "").split(",") if w.strip())
+
+
+BRAND_ANCHORS = _env_words("GZH_CHECK_BRAND_ANCHORS")
+BRAND_ALIASES = _env_words("GZH_CHECK_BRAND_ALIASES")
+BRAND_CANON = os.environ.get("GZH_CHECK_BRAND_CANON", "").strip()
+
 # ── 姿势级 AI 味量化（参考 references/editor_checklist.md）──
 # 人类写作句长爆发式起伏，AI 像节拍器式均匀；下列词是 AI 腔高频信号。
 # 仅作 WARN 提示、不阻断发布；改写仍按 writing-system 11 条白名单规则执行。
@@ -164,8 +177,12 @@ GREENBOOK_MAX_KB = 1536               # 微信贴图单图 ≤1.5MB（2026-10-15
                                       #   10-14「某批」6 张里 3 张超限却照样过闸）
 # 张数下限从口径表取（TT-CARD-MIN），这里只转发，避免同一个数字写两遍。
 # 保留常量名 GREENBOOK_MIN_COUNT 是为了不动下面几十处引用。
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from app.core.spec import CARD_MIN as GREENBOOK_MIN_COUNT  # noqa: E402
+# 开源副本没有内部 app.core.spec：导入失败时退回中性默认 6，保证 --help 等能独立运行。
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from app.core.spec import CARD_MIN as GREENBOOK_MIN_COUNT  # noqa: E402
+except ImportError:
+    GREENBOOK_MIN_COUNT = 6
 GREENBOOK_RATIO = 4.0 / 3.0           # 3:4 竖版
 
 
@@ -704,7 +721,7 @@ def run_check(args):
     else:
         print("✅ 内联样式合规        无 <style>/class/flex/grid/伪元素")
 
-    # 3b. 装饰竖边（2026-11-11 补，澎澎第三次指出）
+    # 3b. 装饰竖边（2026-11-11 补，复核时第三次指出）
     #     事故链：h2 的竖线 11-09 删了 → callout 的竖线也删了 → 指令框的 border-left
     #     一直活到 11-12 的稿子上才被发现。三次都以为「竖线已经清了」，因为
     #     test_style_lock 那条断言始终是绿的：样例稿里没有围栏块。
@@ -732,17 +749,17 @@ def run_check(args):
     else:
         print("✅ 无反引号残留        行内代码已转样式")
 
-    # 4. 原创锚点：澎澎说观点块
-    #    这个号人设写的是「澎澎说」，不是「主理人说」；两种都算，
-    #    「彭彭说」是历史错别字，保留兼容。三处口径必须一致：
-    #    render_f.py 的识别、app/runtime/publish.py 的出包检查、这里。
-    nopin = (html.count("主理人说") + html.count("澎澎说")
-             + html.count("彭彭说"))
-    need = max(1, args.min_opinion)
-    if nopin < need:
-        errors.append(f"「澎澎说」原创锚点 {nopin} 处，需 ≥{need} 处（组件 ⑫），否则难以声明原创")
-    else:
-        print(f"✅ 澎澎说观点块        {nopin} 处")
+    # 4. 原创锚点（品牌规则，默认关闭）
+    #    开源版把专有栏目名做成外部注入的关键词表，仓库内不保留任何具体栏目标记；
+    #    关键词、别名、合法名均由 GZH_CHECK_BRAND_* 环境变量提供，规则骨架不变：
+    #    计数 → 与 --min-opinion 阈值比较 → 不足则报错。
+    if args.brand_rules:
+        nopin = sum(html.count(w) for w in BRAND_ANCHORS)
+        need = max(1, args.min_opinion)
+        if nopin < need:
+            errors.append(f"原创锚点 {nopin} 处，需 ≥{need} 处（组件 ⑫），否则难以声明原创")
+        else:
+            print(f"✅ 原创锚点观点块        {nopin} 处")
 
     # 5. 本地图片存在性
     imgs = re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html)
@@ -785,14 +802,14 @@ def run_check(args):
     else:
         print("✅ 无系列编号          合规")
 
-    # 6d. 栏目名口径（2026-11-07 补，唯一合法写法「澎澎说」）
-    if "主理人说" in _plain_6:
-        errors.append("出现「主理人说」（应改为「## 澎澎说」）。"
-                      "文末署名是澎澎，栏目叫主理人对不上人")
-    elif "彭彭说" in _plain_6:
-        errors.append("出现「彭彭说」错别字（正确是「澎澎说」，三点水）")
-    else:
-        print("✅ 栏目名口径          合规")
+    # 6d. 栏目名口径（品牌规则，默认关闭）：别名 / 历史写法出现即报错
+    if args.brand_rules:
+        bad_alias = [w for w in BRAND_ALIASES if w in _plain_6]
+        if bad_alias:
+            errors.append("出现栏目别名 %s（应统一为「%s」）"
+                          % ("、".join(bad_alias), BRAND_CANON or "统一栏目名"))
+        else:
+            print("✅ 栏目名口径          合规")
 
     # 「下一站」停用（2026-11-09）不在这里查：check.py 读的是渲染后的 HTML，
     # 而 render_f.py 已经把该标题跳掉了，这里永远查不到——查不到还留着，就是假闸。
@@ -1142,7 +1159,11 @@ def main():
     ap.add_argument("--html", default="", help="正文 HTML 路径（长文校验）")
     ap.add_argument("--title", default="", help="文章标题（校验 64 字节）")
     ap.add_argument("--strict", action="store_true", help="软性提醒也升级为硬性错误")
-    ap.add_argument("--min-opinion", type=int, default=1, help="「澎澎说」最少几处，默认 1")
+    ap.add_argument("--min-opinion", type=int, default=1,
+                    help="（品牌规则）原创锚点最少几处，默认 1；仅 --brand-rules 开启时生效")
+    ap.add_argument("--brand-rules", action="store_true",
+                    help="启用品牌规则（默认关闭）；锚点 / 别名关键词由 "
+                         "GZH_CHECK_BRAND_ANCHORS / GZH_CHECK_BRAND_ALIASES 环境变量注入")
     ap.add_argument("--keyword", default="", help="核心关键词（微信搜一搜 SEO 布局检查）")
     ap.add_argument("--channel", default="", help="渠道：greenbook（贴图/小绿书）触发贴图硬闸")
     ap.add_argument("--images", default="", help="贴图目录（与 --channel greenbook 搭配，校验 PNG）")

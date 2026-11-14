@@ -6,7 +6,7 @@
 新的贴图渲染脚本请 `sys.path` 指到本目录 `from dazi_kit import *`，不要再复制一份。
 
 版式特征：黑巨字撑版心、荧光绿重音(面积<=10%)、语义色唯一(黑常态/绿正向/蓝断点/红错误)、
-一页一句话、副标不重复巨字用字、底部留白<=120px、只用品字形(雅黑一族)。
+一页一句话、副标不重复巨字用字、底部留白<=120px、只用一套统一字体(由 fontkit 提供)。
 巨字按宽反算循环降号 + assert；字少塌版时放大字号垂直居中，不塞回文字。
 
 **字号红线**：所有字号必须 ≥ MIN_FONT_PX，f() 里有 assert 兜底。
@@ -15,9 +15,10 @@
 import os
 from PIL import Image, ImageDraw
 
-REF = r"<expert-refs>"
-FONT_R = r'C:\Windows\Fonts\msyh.ttc'
-FONT_B = r'C:\Windows\Fonts\msyhbd.ttc'
+from fontkit import resolve_font
+
+# 可选参考目录：默认 None，当前实现不依赖它；需要时由调用方自行设置。
+REF = None
 
 W, H = 1080, 1440
 MX = 72                      # 版心边距
@@ -110,7 +111,8 @@ def _guard_text_color(fill):
                 '判据见 本仓库/docs/配图标准.md §3.4' % DECO_ONLY[key])
     return fill
 
-BRAND = '澎澎 ｜ AI × 职场'
+# 页脚署名：默认中性值。需要署名时通过 foot(..., brand=...) 外部传入。
+BRAND = '图卡工具箱'
 
 _font_cache = {}
 
@@ -128,7 +130,7 @@ def f(size, bold=True):
     from PIL import ImageFont
     key = (size, bold)
     if key not in _font_cache:
-        _font_cache[key] = ImageFont.truetype(FONT_B if bold else FONT_R, size)
+        _font_cache[key] = ImageFont.truetype(resolve_font(bold), size)
     return _font_cache[key]
 
 

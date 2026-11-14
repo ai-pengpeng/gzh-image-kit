@@ -14,14 +14,14 @@ gen_cards.py —— 长文 → 公众号贴图（竖版卡组）自动拆卡器
   3. 收藏权重最高：清单/步骤浓缩成卡，每行 ≤15 字，好抄好存
   4. 系统会 OCR 卡面文字参与搜索打标签：关键词要出现在卡面上
   5. 结尾轻引导（禁诱导）：合集入口 + 「评论区聊聊」，不喊加微
-  6. 视觉统一：全组一套配色、一种字体（微软雅黑），固定模板反复用
+  6. 视觉统一：全组一套配色、一种字体（由 fontkit 统一解析），固定模板反复用
 
 规格：900 x 1200（3:4 竖版）PNG，与主流贴图规格同源。
 
 拆卡规则（draft.md → 卡组）：
   H1          → 首卡大字报（--cover-title 可覆盖，默认自动取短）
   每个 H2     → 一张要点卡（列表项优先，无列表取段落首句）
-  「澎澎说」引用块 → 一张金句卡（收藏向素材，淡底色）
+  金句引用块 → 一张金句卡（收藏向素材，淡底色）；栏目标题关键词可配置
   「核实说明」引用块 → 跳过（贴图不放核实细节，长文里看）
   代码块      → 跳过，卡面提示「完整代码见文末长文」
   正文「合集「X」」→ 提进尾卡
@@ -31,7 +31,7 @@ gen_cards.py —— 长文 → 公众号贴图（竖版卡组）自动拆卡器
   python gen_cards.py --in draft.md --out cards/ --tag "AI实操" --account "AI澎"
   可选：--cover-title "8字内主标题" --style ocean|mint --keywords "元宝,微信AI"
 
-依赖：pillow；中文字体 C:/Windows/Fonts/msyhbd.ttc
+依赖：pillow；中文字体由 fontkit.resolve_font 统一解析（见 README「字体配置与许可」）
 """
 import argparse
 import json
@@ -39,6 +39,8 @@ import os
 import re
 
 from PIL import Image, ImageDraw, ImageFont
+
+from fontkit import resolve_font
 
 W, H = 900, 1200
 PAD = 64
@@ -62,10 +64,8 @@ OCEAN = dict(bg_top=(240, 246, 252), accent=ACCENT, title=TITLE, body=BODY,
              soft=SOFT, border=BORDER, muted=MUTED)
 STYLES = {"ocean": OCEAN, "mint": MINT}
 
-FONT_CANDIDATES = [
-    "C:/Windows/Fonts/msyhbd.ttc", "C:/Windows/Fonts/msyh.ttc",
-    "C:/Windows/Fonts/simhei.ttf", "C:/Windows/Fonts/simsun.ttc",
-]
+# 金句引用块的栏目标题关键词：默认中性，可通过 --quote-keywords 注入自定义词。
+DEFAULT_QUOTE_KEYWORDS = ("金句", "观点")
 
 # 字号红线（2026-11-10 定，见 本仓库/docs/配图标准.md §3.1）
 # 判据：图片满屏显示时，手机屏宽 360 CSS px；任何文字不得低于 12 CSS px。
@@ -78,16 +78,11 @@ def font(size: int):
         '字号 %dpx 低于红线 %dpx（画布 %dpx 宽 ≈ 手机 12 CSS px）。\n'
         '装不下就删字，不要缩字号。判据见 本仓库/docs/配图标准.md §3.1'
         % (size, MIN_FONT_PX, W))
-    for c in FONT_CANDIDATES:
-        if os.path.exists(c):
-            try:
-                return ImageFont.truetype(c, size)
-            except OSError:
-                continue
-    return ImageFont.load_default()
+    # 字体由 fontkit 统一解析；找不到可用字体时它会抛异常，绝不静默退回默认字体。
+    return ImageFont.truetype(resolve_font(True), size)
 
 
-def _tokens(text: str):
+def _split_units(text: str):
     """切成不可分割单元：连续 ASCII 词（Claude、5.2、30%）算一个，中文和标点逐字。
 
     不加这层的话「Claude Fable 5.2」会被劈成「Clau / de Fable 5.2」——
@@ -137,7 +132,7 @@ def wrap(text: str, fnt, max_w: int, max_lines: int = 2):
         if cur:
             lines.append(cur)
 
-    for tk in _tokens(text):
+    for tk in _split_units(text):
         if tk == "\n":
             flush()
             cur = ""
@@ -182,12 +177,13 @@ d = None
 
 
 # ---------------------------------------------------------------- 解析 markdown
-def parse(md: str):
+def parse(md: str, quote_keywords=None):
     """draft.md → dict(title, sections[{title, points[]}], quote, collection, accounts_note)"""
     lines = md.replace("\r\n", "\n").split("\n")
     title = ""
     sections = []          # {title, points}
-    quotes = []            # 引用块（澎澎说）
+    kws = tuple(quote_keywords) if quote_keywords else DEFAULT_QUOTE_KEYWORDS
+    quotes = []            # 金句引用块
     collection = ""
     i = 0
     cur_sec = None
@@ -217,8 +213,8 @@ def parse(md: str):
             if text:
                 if "数据出处" in text or "核实说明" in text or "核实" in text[:6]:
                     pass  # 跳过核实块
-                elif "澎澎说" in text or "💡" in text:
-                    pass  # 栏目标题行，不是金句本体
+                elif any(k in text for k in kws) or "💡" in text:
+                    pass  # 金句引用块的栏目标题行，不是金句本体
                 else:
                     quotes.append(re.sub(r"\*\*", "", text))
             i += 1
@@ -427,10 +423,11 @@ def draw_tail_card(img, dr, st, account, collection, keywords, tip):
 
 # ---------------------------------------------------------------- 主流程
 def build_cards(md: str, out_dir: str, *, style="ocean", cover_title="",
-                tag="", account="AI澎", keywords=None, benefit="", tip=""):
+                tag="", account="AI澎", keywords=None, benefit="", tip="",
+                quote_keywords=None):
     global d
     st = STYLES[style]
-    data = parse(md)
+    data = parse(md, quote_keywords)
     title = data["title"]
     if not title:
         raise SystemExit("draft.md 里没有找到 H1 标题")
@@ -481,14 +478,19 @@ def main():
     ap.add_argument("--account", default="AI澎", help="号名（页脚/尾卡）")
     ap.add_argument("--keywords", default="", help="逗号分隔关键词，进卡面底部参与 OCR 检索")
     ap.add_argument("--tip", default="", help="尾卡一句引导语")
+    ap.add_argument("--quote-keywords", default="",
+                    help="金句引用块的栏目标题关键词，逗号分隔；默认「金句,观点」。"
+                         "命中这些词的行当作栏目标题跳过，可用于注入自定义栏目名")
     ap.add_argument("--no-meta", action="store_true", help="不写 cards/meta.json")
     a = ap.parse_args()
     with open(a.src, encoding="utf-8") as f:
         md = f.read()
     kws = [k.strip() for k in re.split(r"[,，]", a.keywords) if k.strip()]
+    qkws = [k.strip() for k in re.split(r"[,，]", a.quote_keywords) if k.strip()]
     paths = build_cards(md, a.dst, style=a.style, cover_title=a.cover_title,
                         tag=a.tag, account=a.account, keywords=kws,
-                        benefit=a.benefit, tip=a.tip)
+                        benefit=a.benefit, tip=a.tip,
+                        quote_keywords=qkws or None)
     # 卡组元数据：贴图发布（push_cards.py）要读标题/摘要/号名/合集，
     # 不靠参数人工再传一遍——一次生成，发布时直接用。
     if not a.no_meta:

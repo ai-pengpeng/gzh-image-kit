@@ -32,23 +32,14 @@ import os
 
 from PIL import Image, ImageDraw, ImageFont
 
+from fontkit import resolve_font
+
 RED = "#E23B2E"
-FONT_CANDIDATES = [
-    r"C:\Windows\Fonts\msyhbd.ttc",
-    r"C:\Windows\Fonts\msyh.ttc",
-    r"C:\Windows\Fonts\simhei.ttf",
-    r"C:\Windows\Fonts\simsun.ttc",
-]
 
 
 def load_font(size: int):
-    for p in FONT_CANDIDATES:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size)
-            except Exception:
-                continue
-    return ImageFont.load_default()
+    # 字体由 fontkit 统一解析；找不到可用字体时它会抛异常，绝不静默退回默认字体。
+    return ImageFont.truetype(resolve_font(True), size)
 
 
 def _num(v, total, base):
