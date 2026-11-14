@@ -433,6 +433,103 @@ def cap_html(text: str, max_chars: int = 17) -> str:
     return "".join(out)
 
 
+def _em_width(ch: str) -> float:
+    """一个字符占几个「全角当量」。
+
+    中文/全角标点 = 1.0；西文、数字、半角标点 ≈ 0.55（实测微软雅黑 / Noto 大致如此）。
+    用它估行宽，比按字符数估准：同一段话里混着「Gemini 4 Hydrogen」时，
+    按字数算会把那一行塞爆，按当量算才对得上。
+    """
+    if ord(ch) >= 0x2E80 or ch in "，。、；：！？（）【】《》“”‘’…—·":
+        return 1.0
+    return 0.55
+
+
+# 禁则：这些字符不能出现在行首（标点顶头）/不能出现在行尾（开引号挂尾）
+_NO_LINE_START = "，。、；：！？）】」』〉》”’…·%,.;:!?)]}"
+_NO_LINE_END = "（【「『〈《“‘([{"
+_BREAK_AFTER = "，。、；：！？…—"
+
+
+def cap_lines(text: str, width_em: float, min_last: float = 3.0) -> str:
+    """按全角当量把中文断成几行，返回带 <br> 的 HTML；重点是**不留孤行**。
+
+    为什么不能交给 CSS 自动折行（2026-11-14，外部审美复评指出的最后一处硬伤）
+    ------------------------------------------------------------------------
+    封面左栏宽 486px、字号 42px ≈ 11 字一行。同一句里混了西文时，每行实际容量不一样，
+    浏览器按像素断，最后一行经常只剩「间。」两个字——挂在封面第一眼阅读动线的末尾。
+    讽刺的是这套引擎自己早就在防这个病：`cover_head()` 为标题写了「先缩字号、
+    再平衡折行」的防孤字逻辑，**但同样的保护没铺到正文这条管线上**。
+    防线建好了却没接到该守的地方，比没建更让人放心、也更容易漏。
+
+    做法：
+      1. 贪心装行，按当量算容量；
+      2. 断点优先落在标点后（读起来是句子，不是被切断的词）；
+      3. 避开禁则——标点不顶行首、开引号不挂行尾；
+      4. 最后一行不足 min_last 个字，就从上一行匀字符下来。
+    """
+    if not text:
+        return ""
+    text = re.sub(r"\s*\n\s*", "", str(text)).strip()
+    if not text:
+        return ""
+
+    def split_by_em(s: str, budget: float) -> list[str]:
+        lines, cur, w = [], [], 0.0
+        i = 0
+        while i < len(s):
+            ch = s[i]
+            cw = _em_width(ch)
+            # 禁则：标点不能顶行首 → 挤进当前行（宁可稍宽一点）
+            if w + cw > budget and cur and ch not in _NO_LINE_START:
+                # 回溯找更体面的断点：这一行最后 40% 里有没有标点
+                cut, acc = None, 0.0
+                for j in range(len(cur) - 1, max(-1, int(len(cur) * 0.6) - 1), -1):
+                    acc += _em_width(cur[j])
+                    if cur[j] in _BREAK_AFTER:
+                        cut = j + 1
+                        break
+                if cut:
+                    lines.append("".join(cur[:cut]))
+                    cur = cur[cut:]
+                elif cur[-1] in _NO_LINE_END:
+                    # 行尾是开引号：把它挪到下一行
+                    carry = cur.pop()
+                    lines.append("".join(cur))
+                    cur = [carry]
+                else:
+                    lines.append("".join(cur))
+                    cur = []
+                w = sum(_em_width(x) for x in cur)
+                continue
+            cur.append(ch)
+            w += cw
+            i += 1
+        if cur:
+            lines.append("".join(cur))
+        return lines
+
+    lines = split_by_em(text, width_em)
+
+    # 防孤行：末行太短就从上一行末尾匀字符下来（匀完仍要守禁则）
+    if len(lines) >= 2:
+        guard = 0
+        while (sum(_em_width(x) for x in lines[-1]) < min_last
+               and len(lines[-2]) > 2 and guard < 4):
+            moved = lines[-2][-1]
+            if moved in _NO_LINE_START:      # 挪下来会顶行首，就别挪它，多挪一个字
+                if len(lines[-2]) < 3:
+                    break
+                moved = lines[-2][-2:]
+                lines[-2] = lines[-2][:-2]
+            else:
+                lines[-2] = lines[-2][:-1]
+            lines[-1] = moved + lines[-1]
+            guard += 1
+
+    return "<br>".join(x.strip() for x in lines)
+
+
 def foot(c: dict, cls: str = "") -> str:
     """内页收口区：有 points 就出要点（能照着做），没有就退回一句 caption。
 
@@ -550,7 +647,7 @@ def r1_cover(c: dict) -> str:
   <div class="r1-left">
     <div class="r1-kick">{c['tag']}</div>
     {cover_head(c['head'])}
-    <div class="r1-cap">{cap_html(c['caption'], 11)}</div>
+    <div class="r1-cap">{cap_lines(c['caption'], 11.2)}</div>
     <div class="r1-chip"><i class="chip-in"></i><span>{c.get('badge') or f'{_TOTAL} 张'}</span></div>
   </div>
   {halftone("r1-dots")}
