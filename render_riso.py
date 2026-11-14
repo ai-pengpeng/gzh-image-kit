@@ -261,6 +261,22 @@ LAYOUTS: dict[str, tuple[str, tuple[str, ...]]] = {
 
 CARD_FIELDS = ("tag", "head", "hero", "points", "caption", "badge")
 
+# 一张卡上「引擎认」的全部键 = 会渲染的 + 有明确语义的。
+#   v   —— 指定版式
+#   idx —— 声明这是第几张。引擎按数组顺序出图，**不靠它排序**；
+#          它的作用是「声明意图」，与数组实际位置对不上时告警（见 check_spec_fields）。
+#          这一条是 2026-11-14 补的：49 份存量配置全都写了 idx，如果直接把它判成
+#          「不认识的字段」，每次出图都会刷一遍告警——误报只会训练人忽略提醒，
+#          那比不告警更糟。让它对上位置就静默，对不上才说话。
+CARD_KEYS = CARD_FIELDS + ("v", "idx")
+
+# 配置顶层的键。theme 用作输出文件名前缀，brand/footer 决定页脚品牌串，
+# date 是内容日期（引擎不读，但产线脚本读，保留合法）。
+# subdir 是 `render_cards.py`（v2 卡片引擎）的输出子目录，riso 不读——
+# 但同一个 cards.json 常被两个引擎共用，所以它合法，不能报「无效字段」。
+# 误报只会训练人忽略提醒，那比不提醒更糟。
+SPEC_KEYS = ("theme", "brand", "footer", "date", "subdir", "cards")
+
 
 def print_layouts() -> None:
     """输出 markdown 对照表（README 直接贴这段，别手抄）。"""
@@ -274,13 +290,24 @@ def print_layouts() -> None:
     print("`points` / `caption` 进的是同一块收口区：有 points 出要点，没有才退回 caption。")
 
 
-def check_spec_fields(cards: list[dict]) -> list[str]:
-    """检查「配了但这个版式不渲染」的字段，返回提示语（不中断渲染）。
+def check_spec_fields(cards: list[dict], spec: dict | None = None) -> list[str]:
+    """检查「配了但没人读」的字段，返回提示语（不中断渲染）。
 
     比静默丢弃好：用户能知道「不是没生效，是这个版式不用它」，
     并且知道下一个版式会不会用——不然永远在猜。
+
+    2026-11-14 补：**顶层键也要查**。原来只查每张卡的字段，于是
+    `"subdir": "xxx"` 这种写在顶层的无效键被完全吞掉——外部实测者专门提了这条
+    （「写了 subdir，什么也没发生」）。查一半等于不查：用户看到有告警会以为是全部，
+    看不到告警会以为配置没问题，两种都会把他带偏。
     """
     out = []
+    unused_any = {}     # {"tag": [4, 6]} —— 字段 -> 哪些张用不上
+    if spec:
+        for k in spec:
+            if k not in SPEC_KEYS:
+                out.append("顶层字段 %r 不会被引擎读取（可用：%s）——写了也没效果，"
+                           "要么删掉，要么改成这几个之一" % (k, "、".join(SPEC_KEYS)))
     for i, c in enumerate(cards):
         v = c.get("v") or VARIANT_ORDER[i % len(VARIANT_ORDER)]
         if v not in LAYOUTS:
@@ -288,15 +315,34 @@ def check_spec_fields(cards: list[dict]) -> list[str]:
                        % (i + 1, v, " ".join(LAYOUTS)))
             continue
         uses = LAYOUTS[v][1]
+        unknown = [f for f in c if f not in CARD_KEYS]
+        if unknown:
+            out.append("第 %d 张：字段 %s 引擎不认识，会被忽略（可用：%s）"
+                       % (i + 1, "、".join(unknown), "、".join(CARD_KEYS)))
         given = [f for f in CARD_FIELDS if c.get(f)]
         unused = [f for f in given if f not in uses]
         if unused:
-            out.append("第 %d 张（%s %s）：配了 %s，但这个版式不渲染它"
-                       % (i + 1, v, LAYOUTS[v][0], "、".join(unused)))
+            # 逐张报太吵：操作者习惯给每张都写齐 tag/head/hero/points，
+            # 而 r5~r8 这几款版式本来就不显示 tag。按张刷告警的结果是
+            # 「每次都有一条，于是没人再看」——误报只会训练人忽略提醒。
+            # 汇总成一行，只在渲染时出现一次。
+            unused_any.setdefault("、".join(unused), []).append(i + 1)
+        if "idx" in c:
+            try:
+                if int(c["idx"]) != i + 1:
+                    out.append("第 %d 张：idx 写的是 %s，但它实际在第 %d 位"
+                               "（引擎按数组顺序出图，页码印的是实际位置）"
+                               % (i + 1, c["idx"], i + 1))
+            except (TypeError, ValueError):
+                out.append("第 %d 张：idx 应该是整数，现在是 %r" % (i + 1, c["idx"]))
         if not (c.get("hero") or "").strip():
             out.append("第 %d 张（%s %s）：缺少 hero —— 每张都要有一句大字，"
                        "它是版式的视觉主体；这张会渲出一片空白"
                        % (i + 1, v, LAYOUTS[v][0]))
+    for fields, idxs in sorted(unused_any.items()):
+        out.append("（提示）第 %s 张配了 %s，这几款版式不显示它——不影响出图，"
+                   "想确认某款用哪些字段看 `--print-layouts`"
+                   % ("、".join(str(x) for x in idxs), fields))
     return out
 
 KICKERS = ["这一页先记住", "问题就在这", "往下翻", "这句最要紧", "别急着跳"]
@@ -1028,8 +1074,10 @@ def main():
     apply_brand(spec, a.brand)
     # 字段体检要在渲染前：字段被静默丢弃时，用户看图只会以为「工具就长这样」，
     # 不会想到是自己写错了字段名或选错了版式。
-    for w in check_spec_fields(cards):
-        print("[!] " + w)
+    for w in check_spec_fields(cards, spec):
+        # 提示 ≠ 警告：真正的错（字段不认识、缺 hero、idx 对不上）用 [!]，
+        # 「这个版式不显示某字段」只是信息，用 [i]，免得两类混在一起后都被忽略。
+        print(("[i] " if w.startswith("（提示）") else "[!] ") + w)
     os.makedirs(a.out, exist_ok=True)
 
     # 字体守卫生效点在「渲染前」：图一旦出来，字体错了只能重来。
