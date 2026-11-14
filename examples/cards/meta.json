@@ -1,0 +1,26 @@
+{
+  "cover_title": "贴图工具箱三分钟",
+  "tag": "工具箱",
+  "benefit": "长文没人读得完，贴图能把核心结论顶到读者眼前",
+  "benefit_auto": true,
+  "account": "你的号名",
+  "keywords": [
+    "贴图",
+    "字号",
+    "可读性"
+  ],
+  "tip": "",
+  "style": "ocean",
+  "count": 6,
+  "cards": [
+    "card_01.png",
+    "card_02.png",
+    "card_03.png",
+    "card_04.png",
+    "card_05.png",
+    "card_06.png"
+  ],
+  "source_draft": "examples/sample_draft.md",
+  "generated_at": "2026-11-14T16:22:50+08:00",
+  "font_file": "NotoSansSC-VF.ttf"
+}

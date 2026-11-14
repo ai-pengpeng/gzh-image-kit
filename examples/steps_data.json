@@ -1,0 +1,9 @@
+{
+  "items": [
+    {"t": "装依赖", "d": "pip install -r requirements.txt，只需要 Pillow"},
+    {"t": "配字体", "d": "环境变量指向思源黑体或 Noto Sans SC，找不到会报错不会瞎换"},
+    {"t": "写素材", "d": "draft.md 写清标题、小节、要点，一行一条"},
+    {"t": "跑脚本出图", "d": "gen_cards 出卡组，gen_diagram 出步骤图"},
+    {"t": "体检收工", "d": "check.py 查字号、对比度、体积三道硬闸"}
+  ]
+}

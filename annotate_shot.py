@@ -32,14 +32,15 @@ import os
 
 from PIL import Image, ImageDraw, ImageFont
 
-from fontkit import resolve_font
+from fontkit import load as load_kit_font
 
 RED = "#E23B2E"
 
 
 def load_font(size: int):
-    # 字体由 fontkit 统一解析；找不到可用字体时它会抛异常，绝不静默退回默认字体。
-    return ImageFont.truetype(resolve_font(True), size)
+    # 字体由 fontkit.load 统一解析并实例化字重（可变字体也不会落在常规字重）；
+    # 找不到可用字体时它会抛异常，绝不静默退回默认字体。
+    return load_kit_font(size, bold=True)
 
 
 def _num(v, total, base):

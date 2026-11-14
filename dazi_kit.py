@@ -10,12 +10,12 @@
 巨字按宽反算循环降号 + assert；字少塌版时放大字号垂直居中，不塞回文字。
 
 **字号红线**：所有字号必须 ≥ MIN_FONT_PX，f() 里有 assert 兜底。
-判据与换算公式见 `本仓库/docs/配图标准.md` §3.1。
+判据与换算公式见 `docs/配图标准.md` §3.1。
 """
 import os
 from PIL import Image, ImageDraw
 
-from fontkit import resolve_font
+from fontkit import load as _fk_load
 
 # 可选参考目录：默认 None，当前实现不依赖它；需要时由调用方自行设置。
 REF = None
@@ -25,7 +25,7 @@ MX = 72                      # 版心边距
 CW = W - 2 * MX              # 版心宽 936
 GIANT_RATIO = 0.86           # 巨字最宽行占版心比例
 
-# 字号红线（2026-11-10 定，见 本仓库/docs/配图标准.md §3.1）
+# 字号红线（2026-11-10 定，见 docs/配图标准.md §3.1）
 # 1080 逻辑画布 → 手机 360 CSS px，缩放 3 倍；36px 图片字 = 12 CSS px = 可读下限。
 # 旧版这里页脚 26 / 眉 28 / 付句 29，换算到手机只有 8.7~9.7px，读起来费劲。
 
@@ -47,7 +47,7 @@ MIN_FONT_PX = min_font_px()
 # **对比度红线（2026-11-10 定）**：任何**文字色**对 BG 必须 ≥4.5:1（小字）
 # 或 ≥3:1（巨字/大字号）。字号够大但对比度不够，读起来一样费劲——
 # 实测旧灰 (150,155,162) 只有 2.68:1，那是「字明明变大了还是发虚」的真正原因。
-# 判据与实测表见 本仓库/docs/配图标准.md §3.4；_verify_palette() 在导入时自检。
+# 判据与实测表见 docs/配图标准.md §3.4；_verify_palette() 在导入时自检。
 BG = (250, 250, 251)
 INK = (18, 18, 20)           # 黑 = 常态                    17.9:1 ✅
 GREEN = (0, 164, 108)        # 荧光绿 = 巨字重音（大字号专用）3.09:1 ✅ 大字
@@ -95,7 +95,7 @@ def _verify_palette():
     if big < 3.0:
         bad.append('GREEN 只有 %.2f:1（大字重音需 >=3:1）' % big)
     assert not bad, ('色板不达对比度红线：' + '；'.join(bad) +
-                     '\n判据见 本仓库/docs/配图标准.md §3.4')
+                     '\n判据见 docs/配图标准.md §3.4')
 
 
 _verify_palette()
@@ -108,7 +108,7 @@ def _guard_text_color(fill):
         if key in DECO_ONLY:
             raise AssertionError(
                 '这个颜色不能当文字色：%s。\n小字请用 INK / GRAY / GREEN_D（均 >=4.5:1），'
-                '判据见 本仓库/docs/配图标准.md §3.4' % DECO_ONLY[key])
+                '判据见 docs/配图标准.md §3.4' % DECO_ONLY[key])
     return fill
 
 # 页脚署名：默认中性值。需要署名时通过 foot(..., brand=...) 外部传入。
@@ -126,11 +126,12 @@ def f(size, bold=True):
     floor = min_font_px(W)
     assert size >= floor, (
         '字号 %dpx 低于红线 %dpx（%d 画布 ≈ 手机 12 CSS px）。\n'
-        '装不下就删字，不要缩字号。判据见 本仓库/docs/配图标准.md §3.1' % (size, floor, W))
-    from PIL import ImageFont
+        '装不下就删字，不要缩字号。判据见 docs/配图标准.md §3.1' % (size, floor, W))
     key = (size, bold)
     if key not in _font_cache:
-        _font_cache[key] = ImageFont.truetype(resolve_font(bold), size)
+        # 走 fontkit.load：可变字体（VF）会被实例化到对应字重。
+        # 直接 ImageFont.truetype 遇到 VF 会静默落在 Regular，标题会莫名偏细。
+        _font_cache[key] = _fk_load(size, bold=bold)
     return _font_cache[key]
 
 

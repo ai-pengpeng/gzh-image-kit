@@ -167,14 +167,14 @@ EXP_RE = (r"(上周|上个月|上月|昨天|前天|那天|当时|去年|今年|�
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 贴图 / 小绿书（greenbook）硬闸
-# 贴图一律 AI 漫画风（生图模型 生图），禁止代码卡片图（gen_diagram / gen_cover）。
-# 真因：2026-10 多批贴图误用 gen_diagram 代码卡（单图仅 30–60KB、扁平卡片），
-#       与正典「奶油暖白 #FAF7F2 + 薄荷绿 #4ECDC4、3:4 竖版漫画风」严重不符，风格跑偏。
+# 这个渠道的贴图是**生图模型出的插画**，不是代码渲染的卡片。
+# 真因：早期多批贴图误用了代码卡片图（单张仅 30–60KB、扁平文字卡），
+#       与渠道正典「奶油暖白 #FAF7F2 + 薄荷绿 #4ECDC4、3:4 竖版插画」严重不符。
+# 所以这里用「体积 + 品牌绿占比 + 张数」三个可量化的信号判定「是不是代码卡混进来了」。
 # ─────────────────────────────────────────────────────────────────────────────
-GREENBOOK_MINT = (0x4E, 0xCD, 0xC4)   # 品牌色 #4ECDC4（已修正 #4ECTA4 笔误）
-GREENBOOK_MIN_KB = 150                # 生图模型 生图 ≥150KB；代码卡仅 30–60KB
-GREENBOOK_MAX_KB = 1536               # 微信贴图单图 ≤1.5MB（2026-10-15 补：原闸不查上限，
-                                      #   10-14「某批」6 张里 3 张超限却照样过闸）
+GREENBOOK_MINT = (0x4E, 0xCD, 0xC4)   # 品牌绿 #4ECDC4
+GREENBOOK_MIN_KB = 150                # 插画 ≥150KB；代码卡实测只有 30–60KB
+GREENBOOK_MAX_KB = 1536               # 平台单图上限 1.5MB（早期版本不查上限，超限照样过闸）
 # 张数下限从口径表取（TT-CARD-MIN），这里只转发，避免同一个数字写两遍。
 # 保留常量名 GREENBOOK_MIN_COUNT 是为了不动下面几十处引用。
 # 开源副本没有内部 app.core.spec：导入失败时退回中性默认 6，保证 --help 等能独立运行。
@@ -185,12 +185,17 @@ except ImportError:
     GREENBOOK_MIN_COUNT = 6
 GREENBOOK_RATIO = 4.0 / 3.0           # 3:4 竖版
 
+# 通用图片组体检的上下限（与渠道无关）。上限对齐多数平台单图 10MB；
+# 下限不是硬闸——低于这个数只是「可能压得太狠」，报提醒让人看一眼。
+GENERIC_MAX_KB = 10 * 1024
+GENERIC_MIN_KB = 20
+
 
 def _count_mint(im):
     """统计薄荷绿品牌色 #4ECDC4 的占比（降采样提速）。
-    采用色相带检测：正典画风实际渲染的是「高饱和薄荷绿 #4ECDC4 ↔ 柔和灰薄荷」
+    采用色相带检测：插画实际渲染的是「高饱和薄荷绿 #4ECDC4 ↔ 柔和灰薄荷」
     一整段绿青色（色相 125°–190°，G 为最大通道，饱和度 ≥0.12）。
-    精确匹配法会误杀正典批次（2026-10-15 对照实测：某批 4/6 张 0.00%）。
+    精确匹配法会误杀合规图（同一批里 6 张全部判 0.00%）。
     奶油底(R最大)、蓝色角色(B最大)、灰白(低饱和)均不命中。"""
     try:
         small = im.convert("RGB").resize((180, 240))
@@ -221,8 +226,8 @@ def _count_mint(im):
 
 def _corner_wm_grid(im):
     """右下角落点区（x≥0.86w, y≥0.94h）「亮于高斯参考底」mask，归一到 64×32 网格。
-    生图模型 平台水印（AI生成/PLATFORM 半透明白字）实测落点 x≥0.88w、y≥0.96h，
-    框位留余量罩住；判据 diff>8 与 greenbook.py _clean_corner 同族（亮差检测）。
+    生图工具常在右下角压一行半透明白字水印，实测落点 x≥0.88w、y≥0.96h，
+    框位留余量罩住；判据 diff>8（亮差检测）。
     返回 list[bool]（2048 格）或 None（图太小）。"""
     from PIL import ImageChops, ImageFilter
     w, h = im.size
@@ -242,23 +247,32 @@ def _corner_wm_grid(im):
 
 # ── 贴图文字卡字号体检（2026-11-10 补）────────────────────────────────
 # 为什么审脚本而不是审图片：PNG 里没有字号信息，读不出来。
-# 为什么必须审：贴图渲染脚本每期现场新写，`本仓库/kit/dazi_kit.py` 里有 assert 兜底，
+# 为什么必须审：贴图渲染脚本每期现场新写，`dazi_kit.py` 里有 assert 兜底，
 # 但绕过 kit 自己写 draw.text 的脚本没人管。标准要真落地，就得有个能主动跑的东西。
 CARD_SCREEN_W = 360      # 手机屏宽基准（CSS px）
-CARD_MIN_CSS = 12        # 可读下限（CSS px），见 本仓库/docs/配图标准.md §3.1
+CARD_MIN_CSS = 12        # 可读下限（CSS px），见 docs/配图标准.md §3.1
 
 _FONT_CALL_RE = re.compile(
-    r"(?:font|_sign_font|f)\(\s*(\d{2,3})\s*[,)]"                       # font(26) / f(36)
+    # 函数名集合必须覆盖每个脚本实际用的封装名。
+    # 2026-11-14 补 `ft`：gen_diagram.py 的字体封装叫 ft()，不在原集合里，
+    # 于是这个脚本**一个字号都没被查过**，却一路显示「✅ 都达标」——
+    # 守卫报的是自己正则写窄了，不是脚本没问题（同 EXP_RE 那次教训）。
+    r"(?:font|_sign_font|ft|f)\(\s*(\d{2,3})\s*[,)]"                    # font(26) / ft(26)
     # 两参数形式 font(FONT_REG, 34) —— 2026-11-11 补。共享渲染器 render_cards.py
     # 整个文件都是这个写法，漏了这条等于整份文件一个字号都没查（假 PASS 的来源之一）。
-    r"|(?:font|_sign_font|f)\(\s*[^,()]+,\s*(\d{2,3})\s*[,)]"
+    r"|(?:font|_sign_font|ft|f)\(\s*[^,()]+,\s*(\d{2,3})\s*[,)]"
     r"|(?:put_bl|put_c)\(\s*[^,]+,\s*[^,]+,\s*(\d{2,3})\s*,"            # put_bl(d, txt, 26, ...)
     # 绕过封装直接建字体的写法，漏了这条等于只防一半（2026-11-10 补）
-    r"|ImageFont\.truetype\(\s*[^,)]+,\s*(\d{2,3})\s*[,)]")
+    r"|(?:ImageFont\.truetype|load(?:_kit_font)?)\(\s*[^,()]+,\s*(\d{2,3})\s*[,)]")
 # 字号常写成 int(34 * S)（S = 画布/基准的缩放系数）。先把这层壳剥掉再匹配，
 # 否则一个都抓不到。S 不等于 1 时实际像素 = 基数×S，但基数与画布下限同比例，
 # 判定结论不变——抓基数就够。
 _SCALED_FONT_RE = re.compile(r"int\(\s*(\d{2,3})\s*\*\s*[A-Za-z_][\w.]*\s*\)")
+
+# 脚本整体缩放字号时的两个特征：模块级 `SCALE = 1.6` + 函数内 `round(size * SCALE)`。
+# 两个都命中才当作「需要换算」，避免把随便一个同名字段当成缩放系数。
+_SCALE_DEF_RE = re.compile(r"^SCALE\s*=\s*([\d.]+)\s*$", re.M)
+_SCALE_APPLY_RE = re.compile(r"round\(\s*size\s*\*\s*SCALE\s*\)")
 # HTML/CSS 渲染的贴图（render_riso.py 走 playwright 截图，字号全在 CSS 里）。
 # 2026-11-11 发现：这类渲染器一个 `font(` 调用都没有，只扫 Python 会直接报「没抓到」，
 # 而它恰恰是问题最重的一套（21~34px 共 12 处）。CSS 也要一并扫。
@@ -367,6 +381,12 @@ def audit_card_fonts(target):
             continue
         # 剥掉 int(34 * S) 这层壳，否则整份文件一个字号都匹配不到
         src_norm = _SCALED_FONT_RE.sub(r"\1", src)
+        # 脚本自己把字号整体缩放过（如 gen_diagram 的 `SCALE = 1.6` 与
+        # `size = round(size * SCALE)`）：静态扫描必须按这个系数换算，
+        # 否则会把 ft(24) 报成 24px，而它实际渲的是 38px —— 误报一多，
+        # 这道闸就会被当成噪音绕过（2026-11-14 补）。
+        _sm = _SCALE_DEF_RE.search(src)
+        scale = float(_sm.group(1)) if (_sm and _SCALE_APPLY_RE.search(src)) else 1.0
         m = _CANVAS_RE.search(src) or _CANVAS_ARG_RE.search(src)
         canvas = int(m.group(1)) if m else canvas_guess
         if m and canvas_found is None:
@@ -381,7 +401,7 @@ def audit_card_fonts(target):
                 if not num:
                     continue
                 n_font_seen += 1
-                px = int(num)
+                px = int(round(int(num) * scale))
                 if px < floor:
                     hits.append((os.path.basename(p), lineno, px, floor,
                                  round(px * CARD_SCREEN_W / canvas, 1), line.strip()[:56]))
@@ -434,7 +454,7 @@ def audit_covers(paths):
         if lum < COVER_ART_MIN_LUM:
             problems.append(
                 "%s 平均亮度 %.0f，判定为深色字卡（插画海报应 ≥150）。"
-                "封面默认走 生图模型 插画：prompt → 生无字插画 → render 叠字"
+                "封面默认走插画：先用生图模型出无字插画 → 再用本工具叠字"
                 % (os.path.basename(p), lum))
         else:
             print("  ✅ %s  亮度 %.0f（插画海报）" % (os.path.basename(p), lum))
@@ -542,19 +562,19 @@ def check_greenbook_images(image_dir):
         except Exception as e:
             errors.append("%s 无法读取图像：%s" % (name, e))
             continue
-        # 1) 代码卡片图检测（硬错误）：生图模型 生图 ≥150KB，代码卡仅 30–60KB
+        # 1) 代码卡片图检测（硬错误）：生图模型出的插画 ≥150KB，代码卡仅 30–60KB
         if size_kb < GREENBOOK_MIN_KB:
             errors.append(
-                "%s 仅 %.0fKB —— 疑似代码卡片图（gen_diagram/gen_cover），"
-                "贴图禁止！必须改用 生图模型 AI 漫画风（单图 ≥150KB）。"
-                % (name, size_kb))
+                "%s 仅 %.0fKB（%dx%d）—— 疑似代码卡片图（gen_diagram / gen_cards），"
+                "本渠道禁用！需要生图模型出的 AI 插画（单图 ≥150KB）。"
+                % (name, size_kb, w, h))
         # 1b) 单图体积上限（硬错误，2026-10-15 补）：微信贴图单图 ≤1.5MB
         elif size_kb > GREENBOOK_MAX_KB:
             errors.append(
                 "%s %.0fKB > %dKB 上限（微信贴图单图 ≤1.5MB，超限会被压缩/拒收），"
                 "请压体积后重出。" % (name, size_kb, GREENBOOK_MAX_KB))
         else:
-            print("  ✅ %s  %dx%d  %.0fKB（体量符合 生图模型 漫画风，未超限）"
+            print("  ✅ %s  %dx%d  %.0fKB（体量符合插画规格，未超限）"
                   % (name, w, h, size_kb))
         # 2) 3:4 竖版（硬错误）
         if abs(ratio - GREENBOOK_RATIO) > 0.03:
@@ -590,10 +610,10 @@ def check_greenbook_images(image_dir):
         else:
             print("  ✅ 序号连续          1..%d" % len(files))
     # 6) 右下角水印残留（跨图交集检测，2026-10-15 补）：整套同位置亮区一致率高 → 水印。
-    #    原理：生图模型 平台水印位置固定（x≥0.88w,y≥0.96h），N 张图同格同时亮才计一致；
-    #    画面内容（气泡/高光）位置随机，不会形成高交集。真因：10-13/10-14 多批老图
-    #    未走 finish 去水印直传素材库（「某批」「某批」「某批」实锤），
-    #    且原闸不查水印——机器把关必须补上这道口子。
+    #    原理：生图工具的水印位置固定（x≥0.88w,y≥0.96h），N 张图同格同时亮才计一致；
+    #    画面内容（气泡/高光）位置随机，不会形成高交集。
+    #    本仓库不附带去水印工具（那一步是平台专属的），检出后请用任意图片编辑器
+    #    覆盖右下角固定区域再发；早期版本不查水印，导致整套图带着水印发出去。
     grids = []
     for f in files:
         try:
@@ -614,12 +634,111 @@ def check_greenbook_images(image_dir):
         if consist_max > 0.6:
             errors.append(
                 "右下角疑似平台水印残留：整套 %d 张同位置亮区一致率 %.0f%%（阈值 60%%）。"
-                "去水印须走 greenbook.py finish（会抹右下角平台水印）；已归档图可对原始目录重跑 finish。"
+                "本仓库不附带去水印工具（该步骤依赖平台专属脚本）。"
+                "请用任意图片编辑器覆盖右下角固定区域后重跑本检查。"
                 % (n, consist_max * 100))
         elif consist_max > 0.35:
             warns.append("右下角亮区一致率 %.0f%%，疑似水印或固定 UI 元素，建议目视确认" % (consist_max * 100))
         else:
             print("  ✅ 右下角水印检测      同位置亮区一致率 %.0f%%（<35%%，无固定水印）" % (consist_max * 100))
+    return errors, warns, []
+
+
+def check_images_generic(image_dir):
+    """通用图片组体检（2026-11-14 新增，channel 无关）。
+
+    为什么需要这一档：原来 `--images` 被**硬绑**到 greenbook 闸上，
+    长文配图用户出一整套图之后，只有 `--card-fonts`（静态查脚本源码）和
+    `--cover`（查封面亮度）可用——比例、体积上限、序号连续、水印交集这些
+    现成逻辑全用不上，等于换个渠道就失明。
+
+    与 greenbook 档的区别只有三条硬判据：
+      · 体积下限（greenbook 要 ≥150KB 判「不是代码卡」；通用档不设下限）
+      · 单图上限（通用 10MB；greenbook 1.5MB）
+      · 比例（通用接受 3:4 与 1:1，其余给提醒；greenbook 只认 3:4）
+
+    比例、序号、水印三段逻辑与 greenbook 档同源，改一处两边一起变。
+    """
+    import glob as _glob
+    from PIL import Image as _Image
+
+    errors, warns = [], []
+    if not os.path.isdir(image_dir):
+        return ["图片目录不存在：%s" % image_dir], [], []
+    files = sorted(_glob.glob(os.path.join(image_dir, "*.png")))
+    if not files:
+        return ["图片目录 %s 下没有 PNG 文件" % image_dir], [], []
+
+    print("🔍 图片组通用体检：%s  （%d 张）" % (image_dir, len(files)))
+    for f in files:
+        name = os.path.basename(f)
+        size_kb = os.path.getsize(f) / 1024.0
+        try:
+            with _Image.open(f) as im:
+                w, h = im.size
+        except Exception as e:
+            errors.append("%s 无法读取图像：%s" % (name, e))
+            continue
+        ratio = (h / w) if w else 0.0
+        if size_kb > GENERIC_MAX_KB:
+            errors.append("%s %.1fMB > %dMB 上限（多数平台单图限 10MB，超限会被压缩/拒收）"
+                          % (name, size_kb / 1024, GENERIC_MAX_KB // 1024))
+        elif size_kb < GENERIC_MIN_KB:
+            warns.append("%s 仅 %.0fKB（%dx%d），疑似压缩过度或图过小，"
+                         "手机上会发虚" % (name, size_kb, w, h))
+        # 3:4 与 1:1 都是合规比例；其余只提醒，不阻断（长文配图比例可以自由）
+        if abs(ratio - 4 / 3.0) > 0.03 and abs(ratio - 1.0) > 0.03:
+            warns.append("%s 比例 %dx%d（%.2f），既不是 3:4 也不是 1:1；"
+                         "公众号正文配图建议 3:4" % (name, w, h, ratio))
+        else:
+            print("  ✅ %s  %dx%d  %.0fKB" % (name, w, h, size_kb))
+
+    if len(files) < 3:
+        warns.append("只有 %d 张图；长文正文配图建议 3–5 张（拉停留时长）" % len(files))
+
+    # 序号连续性
+    nums = {}
+    for f in files:
+        b = os.path.basename(f)
+        m = re.search(r"(\d{1,2})\.png$", b)
+        if m:
+            nums[int(m.group(1))] = b
+    if nums:
+        want, got = set(range(1, len(files) + 1)), set(nums)
+        if got != want:
+            warns.append("序号不连续：检出 %s，期望 1..%d（缺号/重号会让后台图序错乱）"
+                         % (sorted(got), len(files)))
+        else:
+            print("  ✅ 序号连续          1..%d" % len(files))
+
+    # 右下角水印（与 greenbook 同一套交集检测）
+    grids = []
+    for f in files:
+        try:
+            with _Image.open(f) as im:
+                g = _corner_wm_grid(im)
+            if g:
+                grids.append(g)
+        except Exception:
+            pass
+    if len(grids) >= 3:
+        n = len(grids)
+        consist_max = 0.0
+        for c in range(len(grids[0])):
+            k = sum(1 for g in grids if g[c])
+            if k / n > consist_max:
+                consist_max = k / n
+        if consist_max > 0.6:
+            errors.append(
+                "右下角疑似平台水印残留：%d 张同位置亮区一致率 %.0f%%（阈值 60%%）。"
+                "请用任意图片编辑器覆盖右下角固定区域后重跑。"
+                % (n, consist_max * 100))
+        elif consist_max > 0.35:
+            warns.append("右下角亮区一致率 %.0f%%，疑似水印或固定 UI 元素，建议目视确认"
+                         % (consist_max * 100))
+        else:
+            print("  ✅ 右下角水印检测      同位置亮区一致率 %.0f%%（<35%%，无固定水印）"
+                  % (consist_max * 100))
     return errors, warns, []
 
 
@@ -1165,8 +1284,13 @@ def main():
                     help="启用品牌规则（默认关闭）；锚点 / 别名关键词由 "
                          "GZH_CHECK_BRAND_ANCHORS / GZH_CHECK_BRAND_ALIASES 环境变量注入")
     ap.add_argument("--keyword", default="", help="核心关键词（微信搜一搜 SEO 布局检查）")
-    ap.add_argument("--channel", default="", help="渠道：greenbook（贴图/小绿书）触发贴图硬闸")
-    ap.add_argument("--images", default="", help="贴图目录（与 --channel greenbook 搭配，校验 PNG）")
+    ap.add_argument("--channel", default="",
+                    help="渠道：greenbook（贴图/小绿书，别名 贴图、小绿书）；"
+                         "不传 = 通用长文口径。该参数真正参与 --images 的分派")
+    ap.add_argument("--images", default="",
+                    help="图片目录。配合 --channel greenbook 走贴图硬闸"
+                         "（体积下限/3:4/张数/品牌绿/水印）；不传 channel 走通用体检"
+                         "（比例/体积上下限/序号连续/水印交集）")
     ap.add_argument("--fig-hue", default="",
                     help="配图配色体检：空格分隔的图片路径，第一个是封面，其余是正文配图。"
                          "查配图主色相是否跟随封面（偏差 ≤30°）。")
@@ -1208,7 +1332,7 @@ def main():
             print("\n💡 顾问提醒（不改完也能发，但这是「同一篇两套色系」的典型症状）：")
             for p in probs:
                 print("    - " + p)
-            print("\n判据见 本仓库/docs/配图标准.md §10.5。")
+            print("\n判据见 docs/配图标准.md §10.5。")
             if not (args.html or args.images or args.card_fonts or args.cover):
                 sys.exit(0)
         else:
@@ -1234,29 +1358,46 @@ def main():
             sys.exit(2)
         if n_font == 0:
             print("\n❌ 扫了 %d 个脚本，但一个字号调用都没认出来。" % n_files)
-            print("   可能是写法超出了检查器的识别范围（变量拼接、字典取值等）。"
-                  "这种情况**不能当作达标**——请人工看一遍，或把写法报给工具维护者。")
+            print("   两种可能，处理方式不同：")
+            print("   ① 写法超出识别范围（变量拼接、字典取值、字号来自命令行参数）——"
+                  "本档静态扫描不适用，请人工确认字号下限；")
+            print("   ② 该脚本根本不画文字（如只画框和箭头的标注工具）——"
+                  "这种情况下不传 --card-fonts 即可。")
+            print("   **不能当作达标**：没查 ≠ 查了没问题。")
             sys.exit(2)
         if hits:
             print("\n❌ 发现 %d 处字号过小：" % len(hits))
             for name, lineno, px, fl, css, code in hits:
                 print("    %s:%d  %dpx（下限 %dpx，手机仅 %.1fpx）  %s"
                       % (name, lineno, px, fl, css, code))
-            print("\n改了会挤就删字，不要缩字号。判据见 本仓库/docs/配图标准.md §3.1")
+            print("\n改了会挤就删字，不要缩字号。判据见 docs/配图标准.md §3.1")
         if color_hits:
             print("\n❌ 发现 %d 处低对比度文字色：" % len(color_hits))
             for name, lineno, rgb, ratio, code in color_hits:
                 print("    %s:%d  %s 对奶油白底仅 %s  %s"
                       % (name, lineno, rgb, ratio, code))
             print("\n小字需 ≥4.5:1。字号够大但颜色太浅，读起来一样费劲——"
-                  "这是「字变大了还是发虚」的真正原因。判据见 本仓库/docs/配图标准.md §3.4")
+                  "这是「字变大了还是发虚」的真正原因。判据见 docs/配图标准.md §3.4")
         if not hits and not color_hits:
             print("✅ 未发现低于下限的字号，文字色对比度均达标")
             sys.exit(0)
         sys.exit(1)
 
     if args.images:
-        errors, warns, advisories = check_greenbook_images(args.images)
+        # --channel 现在是**真参数**，不再只是装饰（2026-11-14 修）。
+        # 原来只有 :1168 一处定义，`grep -n "args.channel" check.py` 零命中——
+        # 传不传 channel 都走 greenbook 闸，而 --help 写着「与 --channel greenbook 搭配」，
+        # 用户会误以为不传就不是那个闸。
+        from channels import is_greenbook
+        _ch = (args.channel or "").strip()
+        if _ch and not is_greenbook(_ch) and _ch.lower() not in ("longform", "长文", "article"):
+            print("❌ 不认识的渠道：%s" % _ch)
+            print("   可用：greenbook（别名 贴图 / 小绿书 / tie）、longform（长文，可省略）")
+            sys.exit(2)
+        if is_greenbook(_ch):
+            errors, warns, advisories = check_greenbook_images(args.images)
+        else:
+            errors, warns, advisories = check_images_generic(args.images)
     else:
         if not args.html:
             print("❌ 必须提供 --html（长文）或 --images（贴图）之一")
@@ -1286,7 +1427,12 @@ def main():
         for e in errors:
             print(f"    ✗ {e}")
         print("=" * 46)
-        print("👉 修完上面每一条再重跑：.venv\\Scripts\\python scripts/check.py --html ... --title ...")
+        # 回显**用户刚才真正敲的那条命令**（2026-11-14 修）。
+        # 原来写死 `.venv\Scripts\python scripts/check.py`——那是内部产线布局，
+        # 本仓库里既没有 .venv 也没有 scripts/，用户照着复制必然 command not found。
+        _argv = " ".join(sys.argv[1:]) or "--html article.html --title 标题"
+        print("👉 修完上面每一条再重跑：")
+        print("   python %s %s" % (os.path.basename(sys.argv[0]), _argv))
         sys.exit(1)
 
     print("✅ PASS —— 硬性卡口全部通过，可以推草稿。")

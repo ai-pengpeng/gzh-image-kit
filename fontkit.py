@@ -133,8 +133,98 @@ def resolve_font(bold: bool = False) -> str:
     """返回可用于 PIL.ImageFont.truetype 的字体文件路径。
 
     bold=True 取粗体文件，bold=False 取常规体文件。找不到时抛 FontNotFoundError。
+
+    注意：**更推荐用 load(size, bold)**，它在这之上还处理了可变字体。
     """
     return _find_font(bool(bold))
+
+
+# ── 可变字体（VF）── 2026-11-14 新增 ────────────────────────────────────────
+# 事故：有人的 GZH_IMAGE_KIT_FONT_BOLD 指向 NotoSansSC-VF.ttf（本机唯一开源中文字体，
+# fontkit 自动扫描也会命中它）。VF 文件本身只有一条「轴」，常规与粗体是同一个文件
+# 的不同坐标——`ImageFont.truetype(path, size)` 拿到的是轴的默认位置（Regular），
+# 于是整套卡渲染出来全是常规字重，标题明显偏细，而且**不报错**。
+# 原本只有 gen_diagram.py 自己写了 set_variation_by_name("Bold")，
+# 其余三个脚本各漏一边，同一批图里标题粗细不一致。
+# 处理：下沉到 fontkit，四个脚本统一走 load()。
+_BOLD_VARIATION_NAMES = ("Bold", "SemiBold", "DemiBold", "Heavy", "Black")
+_BOLD_WGHT = 700
+
+
+def _font_variation_names(font):
+    """取出该字体的可变轴命名实例（非可变字体返回空列表）。"""
+    try:
+        names = font.get_variation_names()
+    except Exception:
+        return []
+    out = []
+    for n in names or []:
+        try:
+            out.append(n.decode("utf-8", "ignore") if isinstance(n, bytes) else str(n))
+        except Exception:
+            continue
+    return out
+
+
+def _apply_bold_variation(font) -> bool:
+    """把可变字体实例化到粗稿位置。成功返回 True。
+
+    两条路径：优先按命名实例（最贴近设计者意图），退化到按 wght 轴设 700。
+    都失败就返回 False，调用方照常使用默认字重——不抛异常，
+    因为「该字体没有粗体轴」是合法情况，不是配置错误。
+    """
+    names = _font_variation_names(font)
+    for want in _BOLD_VARIATION_NAMES:
+        for got in names:
+            if got.strip().lower() == want.lower():
+                try:
+                    font.set_variation_by_name(got)
+                    return True
+                except Exception:
+                    pass
+    try:
+        axes = font.get_variation_axes()
+    except Exception:
+        return False
+    if not axes:
+        return False
+    vals = []
+    for a in axes:
+        nm = a.get("name") if isinstance(a, dict) else getattr(a, "name", b"")
+        if isinstance(nm, bytes):
+            nm = nm.decode("utf-8", "ignore")
+        lo = a.get("minimum", 0) if isinstance(a, dict) else 0
+        hi = a.get("maximum", 1000) if isinstance(a, dict) else 1000
+        if str(nm).lower() in ("wght", "weight"):
+            vals.append(min(max(_BOLD_WGHT, lo), hi))
+        else:
+            dflt = a.get("default", lo) if isinstance(a, dict) else lo
+            vals.append(dflt)
+    if not vals:
+        return False
+    try:
+        font.set_variation_by_axes(vals)
+        return True
+    except Exception:
+        return False
+
+
+def load(size: int, bold: bool = False):
+    """取一个可直接 draw 的字体对象：`load(40)` / `load(40, bold=True)`。
+
+    这是**所有出图脚本取字体的唯一入口**。相比 `ImageFont.truetype(resolve_font(bold), size)`，
+    它多做一件事：可变字体（VF）会被实例化到对应字重，不会静默落在 Regular。
+
+    `resolve_font` 仍保留（render_riso 等需要路径的场景仍用它），
+    但凡是「要拿去画字」的地方都应该走 load()。
+    """
+    from PIL import ImageFont
+
+    path = resolve_font(bold)
+    font = ImageFont.truetype(path, size)
+    if bold:
+        _apply_bold_variation(font)
+    return font
 
 
 def resolve_font_family():

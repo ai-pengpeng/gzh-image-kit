@@ -43,7 +43,7 @@ import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
-from fontkit import resolve_font
+from fontkit import load as load_kit_font
 
 # 字体路径由 fontkit.resolve_font 统一解析（可再分发中文字体优先，找不到即抛异常）。
 # 见模块顶部 import 与 README「字体配置与许可」。
@@ -245,22 +245,18 @@ def palette_from_cover(path, min_contrast=4.6):
 
 def ft(size, bold=False):
     size = max(10, int(round(size * SCALE)))
-    # 字号红线（判据见 本仓库/docs/配图标准.md §3.1）：图片满屏显示时手机屏宽
+    # 字号红线（判据见 docs/配图标准.md §3.1）：图片满屏显示时手机屏宽
     # 360 CSS px，任何文字不得低于 12 CSS px → 本画布下限 12×W/360。
     # 原来这里没有任何下限，mode_list 的小标签用到 19（=30px，手机仅 10px）。
     floor = int(round(12.0 * CANVAS_W / 360.0))
     assert size >= floor, (
         '字号 %dpx 低于红线 %dpx（画布 %dpx ≈ 手机 12 CSS px）。\n'
-        '装不下就删字，不要缩字号。判据见 本仓库/docs/配图标准.md §3.1'
+        '装不下就删字，不要缩字号。判据见 docs/配图标准.md §3.1'
         % (size, floor, CANVAS_W))
-    # 字体由 fontkit 统一解析；找不到可用字体时它会抛异常，绝不静默退回默认字体。
-    f = ImageFont.truetype(resolve_font(bold), size)
-    # 可变字体显式设字重；非可变字体不支持该接口，忽略即可。
-    try:
-        f.set_variation_by_name("Bold" if bold else "Regular")
-    except Exception:
-        pass
-    return f
+    # 字体与字重实例化统一由 fontkit.load 处理（2026-11-14 下沉）。
+    # 原来这里自己写了一行 set_variation_by_name，其余三个脚本各漏一边，
+    # 同一批图里的标题粗细就对不上了。
+    return load_kit_font(size, bold=bold)
 
 
 def wrap(d, text, font, max_w):
@@ -721,12 +717,10 @@ def main():
                     help="渠道标识；传 greenbook/贴图/小绿书 会拒绝生成（贴图禁用代码卡片图）")
     a = ap.parse_args()
 
-    # ⚠️ 贴图 / 小绿书（greenbook）禁用本脚本（代码卡片图）
-    _GREENBOOK = {"greenbook", "贴图", "小绿书", "tie"}
-    if a.channel.lower() in _GREENBOOK:
-        print("❌ 贴图/小绿书（greenbook）禁止调用 gen_diagram（代码卡片图生成器）。")
-        print("   贴图一律用 生图模型 AI 漫画风：奶油暖白 #FAF7F2 + 薄荷绿 #4ECDC4，3:4 竖版。")
-        print("   本脚本仅限公众号长文正文配图。如确需长文配图，去掉 --channel greenbook。")
+    # ⚠️ 贴图 / 小绿书（greenbook）禁用本脚本（代码卡片图）。
+    # 判断与文案的唯一真身在 channels.py —— 别名表和拒绝话术写两处必有一处漏。
+    from channels import reject_greenbook
+    if reject_greenbook(a.channel, "gen_diagram（代码卡片图生成器）"):
         sys.exit(2)
 
     global TITLE, SUB, SCALE, FOOT, CANVAS_W, HERO
@@ -773,6 +767,11 @@ def main():
     if FOOT:
         draw_foot(d2, W, y, s)
 
+    # 输出目录不存在时自建（2026-11-14 修）。
+    # 原来要等到这张图画完才在 save 阶段抛 FileNotFoundError——渲染全跑完了才挂，
+    # 是最伤人的一种失败。gen_cards / annotate_shot / render_riso 都会自建，这里补齐。
+    _out_dir = os.path.dirname(os.path.abspath(a.out))
+    os.makedirs(_out_dir, exist_ok=True)
     img.save(a.out, quality=94)
     print(f"✅ {a.out}  {W}×{H}  mode={a.mode} style={used} fs={SCALE}")
 

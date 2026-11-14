@@ -37,10 +37,12 @@ import argparse
 import json
 import os
 import re
+import sys
+from datetime import datetime
 
 from PIL import Image, ImageDraw, ImageFont
 
-from fontkit import resolve_font
+from fontkit import load as load_font
 
 W, H = 900, 1200
 PAD = 64
@@ -51,7 +53,7 @@ TITLE = (31, 58, 82)        # #1f3a52
 BODY = (69, 97, 122)        # #45617a
 MUTED = (92, 113, 135)      # #5c7187  注释/小字。原 #8aa0b6 对白底仅 2.65:1，
                             # 和贴图那边 GRAY 2.68:1 是同一种病：字够大但太浅，看着发虚。
-                            # 现 4.95:1（小字需 >=4.5:1，判据见 本仓库/docs/配图标准.md §3.4）
+                            # 现 4.95:1（小字需 >=4.5:1，判据见 docs/配图标准.md §3.4）
 BORDER = (207, 220, 236)    # #cfdcec
 SOFT = (227, 238, 248)      # #e3eef8
 PAPER = (252, 253, 255)
@@ -67,7 +69,7 @@ STYLES = {"ocean": OCEAN, "mint": MINT}
 # 金句引用块的栏目标题关键词：默认中性，可通过 --quote-keywords 注入自定义词。
 DEFAULT_QUOTE_KEYWORDS = ("金句", "观点")
 
-# 字号红线（2026-11-10 定，见 本仓库/docs/配图标准.md §3.1）
+# 字号红线（2026-11-10 定，见 docs/配图标准.md §3.1）
 # 判据：图片满屏显示时，手机屏宽 360 CSS px；任何文字不得低于 12 CSS px。
 # 本脚本画布 900 宽 → 12 × 900 / 360 = 30px 为下限。
 MIN_FONT_PX = round(12 * W / 360)
@@ -76,10 +78,11 @@ MIN_FONT_PX = round(12 * W / 360)
 def font(size: int):
     assert size >= MIN_FONT_PX, (
         '字号 %dpx 低于红线 %dpx（画布 %dpx 宽 ≈ 手机 12 CSS px）。\n'
-        '装不下就删字，不要缩字号。判据见 本仓库/docs/配图标准.md §3.1'
+        '装不下就删字，不要缩字号。判据见 docs/配图标准.md §3.1'
         % (size, MIN_FONT_PX, W))
-    # 字体由 fontkit 统一解析；找不到可用字体时它会抛异常，绝不静默退回默认字体。
-    return ImageFont.truetype(resolve_font(True), size)
+    # 字体由 fontkit.load 统一解析并实例化字重（可变字体也不会落在常规字重）；
+    # 找不到可用字体时它会抛异常，绝不静默退回默认字体。
+    return load_font(size, bold=True)
 
 
 def _split_units(text: str):
@@ -185,6 +188,7 @@ def parse(md: str, quote_keywords=None):
     kws = tuple(quote_keywords) if quote_keywords else DEFAULT_QUOTE_KEYWORDS
     quotes = []            # 金句引用块
     collection = ""
+    lead = ""              # 首段（给首卡副标兜底用）
     i = 0
     cur_sec = None
     while i < len(lines):
@@ -248,8 +252,60 @@ def parse(md: str, quote_keywords=None):
                     cur_sec["points"].append(sent)
                 if len(cur_sec["points"]) >= 6:
                     break
+        elif not lead:
+            # H1 之后、第一个 ## 之前的正文段落 = 文章首段。
+            # 用来给首卡兜底一句副标（2026-11-14 补：不给 --benefit 时首卡中段全空）。
+            lead = re.sub(r"`", "", re.sub(r"\*\*", "", s)).strip()
         i += 1
-    return dict(title=title, sections=sections, quotes=quotes, collection=collection)
+    return dict(title=title, sections=sections, quotes=quotes,
+                collection=collection, lead=lead)
+
+
+def _fallback_benefit(lead: str, main: str, max_len: int = 22) -> str:
+    """首卡副标兜底：取文章首段第一句，截到 max_len 字。
+
+    为什么需要（2026-11-14 试用反馈）：不传 --benefit 时，首卡就是
+    「主标题 + 一条下划线 + 底部滑动提示」，中段大片留白，信息量太低。
+    首卡决定要不要看，宁可给一句从正文首段来的话，也好过一片空白。
+
+    与主标题前四个字重复的直接放弃——重复一遍不如空着，那只是把同一句话说两次。
+    """
+    if not lead:
+        return ""
+    first = re.split(r"(?<=[。！？])", lead.strip())[0].strip().rstrip("。！？")
+    if not first:
+        return ""
+    if main and (first[:4] in main or main[:4] in first):
+        return ""
+    if len(first) <= max_len:
+        return first
+    # 太长就按逗号/分号整段收，宁可短一句完整的，也不要在半句上硬切——
+    # 「长文没人读得完，贴图能把核心结论顶到」比「长文没人读得完」更像故障。
+    acc = ""
+    for p in re.split(r"(?<=[，,；;])", first):
+        if len(acc) + len(p) > max_len:
+            break
+        acc += p
+    acc = acc.rstrip("，,；;")
+    if len(acc) >= 6:
+        return acc
+    return first[:max_len].rstrip("，,；;")
+
+
+def _auto_benefit(data, main: str) -> str:
+    """兜底副标的取句顺序：文章首段 → 第一个小节的第一条要点。
+
+    为什么要有第二级：很多稿子是「# 标题 → 直接 ## 小节」，没有首段，
+    只认首段的话兜底等于没有（试用反馈里那张封面就是这么空着的）。
+    """
+    lead = data.get("lead", "") or ""
+    if not lead.strip():
+        for sec in data.get("sections") or []:
+            pts = sec.get("points") or []
+            if pts:
+                lead = pts[0]
+                break
+    return _fallback_benefit(lead, main)
 
 
 def shorten_cover_title(title: str, max_len: int = 8) -> str:
@@ -282,18 +338,40 @@ def pill(dr, x, y, text, bg, fg, fnt):
 
 
 def draw_cover(img, dr, st, main_title, tag, benefit, account, total):
-    """首卡：大字报。主标题特大居中，3 秒讲清讲什么。"""
-    y = 130
+    """首卡：大字报。主标题特大居中，3 秒讲清讲什么。
+
+    2026-11-14 改：内容块按实测高度**垂直居中**。
+    原来 y 从固定 130 往下排，标题一两行、没有副标时，内容只占上半屏，
+    中间空掉一大片（试用反馈第一条）。留白本身没错，但上下不均的留白
+    读起来是「没排完」，不是「设计留白」。
+    """
+    # 先量高度，再决定起点
+    title_fnt = None
+    lines = []
+    for size in (92, 76, 60):
+        title_fnt = font(size)
+        lines = wrap(main_title, title_fnt, W - PAD * 2, max_lines=3)
+        if len(lines) <= 2 and all(dr.textlength(x, font=title_fnt) <= W - PAD * 2 for x in lines):
+            break
+    h_tag = 0
+    if tag:
+        h_tag = int(font(30).size * 2.0) + 46
+    h_title = int(title_fnt.size * 1.35) * len(lines)
+    h_rule = 26 + 12 + 66
+    # 副标最多两行：34px 是字号下限之上的最轻一档，不能再降（降了就撞 §3.1 红线）
+    b_fnt = font(34) if benefit else None
+    b_lines = wrap(benefit, b_fnt, W - PAD * 2, max_lines=2) if benefit else []
+    h_benefit = (int(b_fnt.size * 1.4) * len(b_lines) + 16) if b_lines else 0
+    content_h = h_tag + h_title + h_rule + h_benefit
+
+    top_limit = 130                     # 与页眉留白对齐
+    bottom_limit = H - 220 - 40         # 底部滑动提示之上留 40 呼吸
+    y = top_limit + max(0, (bottom_limit - top_limit - content_h) // 2)
+
     if tag:
         fnt = font(30)
         y += pill(dr, PAD, y, tag, st["accent"], (255, 255, 255), fnt) + 46
-    # 主标题：按长度自动降字号 92→72→56
-    fnt = None
-    for size in (92, 76, 60):
-        fnt = font(size)
-        lines = wrap(main_title, fnt, W - PAD * 2, max_lines=3)
-        if len(lines) <= 2 and all(dr.textlength(x, font=fnt) <= W - PAD * 2 for x in lines):
-            break
+    fnt = title_fnt
     for ln in lines:
         tw = dr.textlength(ln, font=fnt)
         dr.text(((W - tw) / 2, y), ln, font=fnt, fill=st["title"])
@@ -303,11 +381,12 @@ def draw_cover(img, dr, st, main_title, tag, benefit, account, total):
     uw = int(W * 0.32)
     dr.rounded_rectangle([(W - uw) / 2, y, (W + uw) / 2, y + 12], radius=6, fill=st["accent"])
     y += 66
-    if benefit:
-        fnt = font(34)
-        tw = dr.textlength(benefit, font=fnt)
-        dr.text(((W - tw) / 2, y), benefit, font=fnt, fill=st["body"])
-        y += 58
+    if b_lines:
+        for bl in b_lines:
+            tw = dr.textlength(bl, font=b_fnt)
+            dr.text(((W - tw) / 2, y), bl, font=b_fnt, fill=st["body"])
+            y += int(b_fnt.size * 1.4)
+        y += 16
     # 中部留白 + 底部引导
     fnt = font(30)
     tip = "左右滑动，看完这 %d 张 →" % total
@@ -432,6 +511,12 @@ def build_cards(md: str, out_dir: str, *, style="ocean", cover_title="",
     if not title:
         raise SystemExit("draft.md 里没有找到 H1 标题")
     main = cover_title or shorten_cover_title(title)
+    # 副标兜底（2026-11-14）：不给 --benefit 时用文章首句，避免首卡中段全空。
+    if not benefit:
+        benefit = _auto_benefit(data, main)
+        if benefit:
+            print("[info] 首卡未给 --benefit，已用文章首句兜底：%s" % benefit)
+            print("       首卡是决定「看不看」的那一张，建议用 --benefit 显式写一句利益点。")
     kws = keywords or []
 
     # 卡组规划：首卡 + 小节卡 + 金句卡(≤1) + 尾卡
@@ -473,8 +558,11 @@ def main():
     ap.add_argument("--out", dest="dst", required=True, help="输出目录（建议文章目录/cards/）")
     ap.add_argument("--style", default="ocean", choices=list(STYLES.keys()))
     ap.add_argument("--cover-title", default="", help="首卡主标题（≤8 字最优，默认自动截取）")
-    ap.add_argument("--tag", default="", help="首卡类别 pill，如 AI实操")
-    ap.add_argument("--benefit", default="", help="首卡利益点一句，如 全程免费 10分钟上手")
+    ap.add_argument("--tag", default="", help="首卡类别 pill，如 AI实操（留空则首卡顶部无标签）")
+    ap.add_argument("--benefit", default="",
+                    help="首卡利益点一句，如 全程免费 10分钟上手。"
+                         "**显著影响首卡观感**：留空时首卡中段只有一条下划线，"
+                         "工具会用文章首句兜底（≤18 字），但兜底句通常不如手写的一句")
     ap.add_argument("--account", default="图卡工具箱", help="号名（页脚/尾卡）")
     ap.add_argument("--keywords", default="", help="逗号分隔关键词，进卡面底部参与 OCR 检索")
     ap.add_argument("--tip", default="", help="尾卡一句引导语")
@@ -482,7 +570,18 @@ def main():
                     help="金句引用块的栏目标题关键词，逗号分隔；默认「金句,观点」。"
                          "命中这些词的行当作栏目标题跳过，可用于注入自定义栏目名")
     ap.add_argument("--no-meta", action="store_true", help="不写 cards/meta.json")
+    ap.add_argument("--channel", default="",
+                    help="渠道标识；传 greenbook/贴图/小绿书 会拒绝生成"
+                         "（该渠道要求生图插画，代码卡片图过不了体积闸）")
     a = ap.parse_args()
+
+    # 渠道闸（2026-11-14 补，与 gen_diagram 同一份判断，见 channels.py）。
+    # 原缺此闸：用户按直觉「gen_cards 出贴图 → check --channel greenbook 验收」，
+    # 产出 20–47KB 必然被体积闸判 FAIL，白跑一轮。闸装在开头，生成前就拦住。
+    from channels import reject_greenbook
+    if reject_greenbook(a.channel, "gen_cards（代码渲染的图卡组）"):
+        sys.exit(2)
+
     with open(a.src, encoding="utf-8") as f:
         md = f.read()
     kws = [k.strip() for k in re.split(r"[,，]", a.keywords) if k.strip()]
@@ -494,16 +593,38 @@ def main():
     # 卡组元数据：贴图发布（push_cards.py）要读标题/摘要/号名/合集，
     # 不靠参数人工再传一遍——一次生成，发布时直接用。
     if not a.no_meta:
+        # 追溯字段（2026-11-14 补）：排字重问题时，是靠反查「这次到底用了哪个字体文件」
+        # 定位的。meta 里不记这三项，下次还得从头猜。
+        from fontkit import resolve_font as _rf
+        try:
+            _font_bold = _rf(True)
+        except Exception:
+            _font_bold = ""
+        # meta 记**实际画到图上**的副标（含兜底），不是仅记用户传的参数——
+        # 否则事后对不上「图上有这句话，meta 里没有」。
+        _main = a.cover_title or shorten_cover_title(
+            md.splitlines()[0].lstrip("# ").strip())
+        _benefit_eff = a.benefit or _auto_benefit(parse(md), _main)
         meta = {
             "cover_title": a.cover_title or shorten_cover_title(md.splitlines()[0].lstrip("# ").strip()),
             "tag": a.tag,
-            "benefit": a.benefit,
+            "benefit": _benefit_eff,
+            "benefit_auto": not bool(a.benefit),
             "account": a.account,
             "keywords": kws,
             "tip": a.tip,
             "style": a.style,
             "count": len(paths),
             "cards": [os.path.basename(p) for p in paths],
+            # ── 可追溯三项 ──
+            # 存调用时传进来的原样路径，不转绝对路径：
+            # meta.json 会跟着卡组一起进仓库/发出去，写绝对路径等于把
+            # 本机目录结构（用户名、盘符）一起泄露——这正是本仓库最该避免的一类。
+            "source_draft": a.src,
+            "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            # 只记文件名：排字重问题时靠「是不是 VF」就能定位，
+            # 完整路径属于本机信息，不进 meta。
+            "font_file": os.path.basename(_font_bold) if _font_bold else "",
         }
         meta_path = os.path.join(a.dst, "meta.json")
         with open(meta_path, "w", encoding="utf-8", newline="\n") as f:
