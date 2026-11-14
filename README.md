@@ -15,6 +15,7 @@
 | `gen_diagram.py` | 步骤 / 对比 / 清单 / 阶段 四版式公众号**长文配图**（inside article，不是贴图） | Pillow |
 | `annotate_shot.py` | 截图标注：红框 / 箭头 / 圆圈 / 序号 | Pillow |
 | `check.py` | 产出图体检：字号、对比度、体积、比例、序号、水印 | Pillow |
+| **`doctor.py`** | **环境体检**：Python / Pillow / Chrome / 中文字体一次查完，缺什么直接给下载与安装命令 | 标准库 |
 | `fontkit.py` | 共享字体入口：`load(size, bold)` 统一取字体并处理可变字体（VF）字重 | Pillow |
 | `channels.py` | 渠道口径唯一真身：哪个渠道能不能用代码渲染图、渠道别名表 | 标准库 |
 
@@ -23,14 +24,28 @@
 ```bash
 pip install -r requirements.txt
 
-# 配置中文字体（必需，见下方「字体配置与许可」）
+# 0. 先体检（强烈建议，尤其第一次用）
+#    它会告诉你 Chrome 有没有、中文字体缺不缺、缺的话去哪下、下完放哪。
+#    有 ❌ 就照它给的命令做，做完重跑一次；没 ❌ 直接往下。
+python doctor.py
+
+# 1. 出图（示例配置，仓库自带）
+python render_riso.py --spec examples/cards_riso.json --out out/riso/
+```
+
+**字体不用预先配**：脚本会自动找——先看环境变量，再看系统里装的开源中文字体
+（思源黑体 / Noto Sans SC / 霞鹜文楷…），最后退到系统自带的中文黑体
+（微软雅黑 / 苹方 / 等线）。**找不到才报错，并把下载地址和安装命令一起打出来。**
+
+想用指定的字体（推荐，这样别人重跑你的配置能出一样的图）：
+
+```bash
+# bash
 export GZH_IMAGE_KIT_FONT_REG=/path/to/SourceHanSansSC-Regular.otf
 export GZH_IMAGE_KIT_FONT_BOLD=/path/to/SourceHanSansSC-Bold.otf
-# Windows PowerShell 用：
+# Windows PowerShell
 #   $env:GZH_IMAGE_KIT_FONT_REG="C:/path/to/SourceHanSansSC-Regular.otf"
 #   $env:GZH_IMAGE_KIT_FONT_BOLD="C:/path/to/SourceHanSansSC-Bold.otf"
-
-python render_riso.py --spec examples/cards_riso.json --out out/riso/
 ```
 
 > **`--out` 别写 `examples/`**：那会直接覆盖官方样张，之后就再没有「合格产出长什么样」的
@@ -99,37 +114,54 @@ python check.py --card-fonts render_riso.py
 
 ## 字体配置与许可
 
-本仓库**不附带任何字体文件**，也不引用不可再分发的系统专有字体。所有出图脚本
-（`dazi_kit.py` / `gen_cards.py` / `gen_diagram.py` / `annotate_shot.py` /
-`render_riso.py`）统一通过 `fontkit.py` 的 `load(size, bold)` 取字体；**找不到可用
-中文字体时抛清晰异常，绝不静默退回默认字体**（项目红线：静默回退曾造成
-「图能出、只是悄悄换了字体」的事故）。
+先说结论：**正常情况你什么都不用配。** 只有脚本自己找不到字体时，才需要动手。
 
-> **可变字体（VF）**：如果 `GZH_IMAGE_KIT_FONT_BOLD` 指向的是 `NotoSansSC-VF.ttf`
-> 这类可变字体，文件本身不区分常规 / 粗体两层，必须显式做 variation instancing
-> 才会出粗体。`fontkit.load(size, bold=True)` 已内置这一步（先按名字取 `Bold`，
-> 退化到按 `wght` 轴设 700），所以**出图脚本一律不要自己 `ImageFont.truetype`**，
-> 否则整套图会悄无声息地全部落在常规字重。
+本仓库**不附带任何字体文件**。所有出图脚本（`dazi_kit.py` / `gen_cards.py` /
+`gen_diagram.py` / `annotate_shot.py` / `render_riso.py`）统一通过 `fontkit.py`
+取字体；找不到可用中文字体时抛清晰异常，**绝不静默退回默认字体**
+（项目红线：静默回退曾造成「图能出、只是悄悄换了字体」的事故）。
 
-请自备一款**允许再分发 / 商用**的中文字体，推荐思源黑体 Source Han Sans SC
-或 Noto Sans CJK SC（均为 SIL OFL 1.1）。**下载出处**（不联网也能照这个找）：
+### 字体按三档查找
 
-- Noto Sans CJK：<https://github.com/notofonts/noto-cjk/releases>（选 `Sans` → `OTF` 或 `Variable`）
-- 思源黑体 Source Han Sans：<https://github.com/adobe-fonts/source-han-sans/releases>
-- 国内镜像：Gitee 搜「思源黑体」，或从系统字体目录里找一个 OFL 字体先用着
+| 档 | 找什么 | 说明 |
+|---|---|---|
+| 1 | 环境变量 `GZH_IMAGE_KIT_FONT_REG` / `_BOLD` | 你明确指定，优先级最高；指的文件不存在会直接报错，不会偷偷换 |
+| 2 | 系统里装的开源 / 免费商用中文字体 | 思源黑体、Noto Sans SC/CJK、更纱黑体、霞鹜文楷、文泉驿、MiSans、HarmonyOS Sans、阿里巴巴普惠体…按白名单文件名识别，**优先选许可证最干净的** |
+| 3 | 系统自带的中文黑体 | 微软雅黑、等线、黑体、苹方、冬青黑体。**只在你机器上用，不随仓库分发**；用到这一档会打一条提示，提醒你授权范围要自己确认 |
 
-配置方式（优先级从高到低）：
+三档都不通才报错，异常里直接写清下载地址 + Windows / macOS / Linux 三种安装命令。
 
-1. 环境变量 `GZH_IMAGE_KIT_FONT_REG` / `GZH_IMAGE_KIT_FONT_BOLD`：分别指向常规体与
-   粗体字体文件的绝对路径。设了但文件不存在会直接报错，不会偷偷换字体。
-2. 不设环境变量时，`fontkit.py` 会在常见系统字体目录里查找上述开源字体；
-   找不到就抛 `FontNotFoundError`。
+> **为什么有第 3 档**（2026-11-14，外部实测反馈）
+> 原来的白名单只认开源字体，本意是「不把字体文件打包进仓库」。但那条规矩被执行成了
+> 「运行时也不许用系统字体」，结果**一台只有微软雅黑的中文 Windows 会被完全堵死**：
+> 文件在、能用、合法，却报 `FontNotFoundError`。两个独立外部测试者都卡在这一步。
+> 正确的边界是：**分发**只用可再分发字体，**运行时**允许用本机已授权的字体——
+> 前提是把「你现在用的哪个、授权自己看」说出来，这才是原来那条红线的本意。
+
+### 想稳定复现，就配一款开源字体
+
+第 2、3 档都是「你机器上碰巧有什么就用什么」。**你要把配置发给别人、或者换台机器重跑，
+出来的字可能就不一样了。** 想彻底稳定，装一款开源字体并固定下来：
+
+- Noto Sans SC —— <https://fonts.google.com/noto/specimen/Noto+Sans+SC>（右上 Download family）
+- 思源黑体 Source Han Sans —— <https://github.com/adobe-fonts/source-han-sans/releases>
+- 国内打不开：在 Gitee 搜「思源黑体」/「Noto Sans SC」，一般有人做镜像（认准 SIL OFL 协议）
+
+装进系统字体目录后重跑 `python doctor.py`，它应该报「字体：开源可再分发」。
+或者不装，用上面第 1 档的环境变量直接指过去。
+
+> **可变字体（VF）**：如果指向的是 `NotoSansSC-VF.ttf` 这类可变字体，文件本身不区分
+> 常规 / 粗体两层，必须显式做 variation instancing 才会出粗体。
+> `fontkit.load(size, bold=True)` 已内置这一步（先按名字取 `Bold`，退化到按 `wght` 轴设 700），
+> 所以**出图脚本一律不要自己 `ImageFont.truetype`**，否则整套图会悄无声息地全部落在常规字重。
+
+### Chrome 端的两条路
 
 `render_riso.py` 通过 Chrome + CSS 渲染，字体走两条路，按顺序试：
 
-1. **CSS 字体族**：`GZH_IMAGE_KIT_FONT_FAMILY`（逗号分隔，如 `Source Han Sans SC,Noto Sans CJK SC`），
-   渲染前实测 Chrome 到底有没有用上它；几个族里有一个能用就用那一个，用不上的从字体栈里剔除
-   （留着会让同一张图混排两种字形）。
+1. **CSS 字体族**：`GZH_IMAGE_KIT_FONT_FAMILY`（逗号分隔，如 `Source Han Sans SC,Noto Sans CJK SC`）；
+   不设时按第 2/3 档自动给出族名。渲染前实测 Chrome 到底有没有用上它，几个族里有一个能用
+   就用那一个，用不上的从字体栈里剔除（留着会让同一张图混排两种字形）。
 2. **字体文件直注**：系统里一个族都没装、但 `fontkit` 能找到字体文件时，脚本自己生成
    `@font-face` 把文件喂给 Chrome，不要求「字体已注册成系统字体」。
 
@@ -137,13 +169,15 @@ python check.py --card-fonts render_riso.py
 > 一大批机器堵死在第一步：**字体文件在（PIL 排得出字），但没注册成系统字体族（Chrome 按
 > 族名叫不出来）**。中文 Windows 上这是常态，尤其手工拷进 `C:\Windows\Fonts` 的开源字体。
 > 两条线（PIL 按路径、Chrome 按族名）取字体的来源不同，必须能对上，否则「有字体却出不了图」。
-> 只有当**两条路都断**时才拒绝出图，红线不变：绝不静默回退成别的字体。
 
 Chrome 路径用环境变量 `CHROME_PATH` 或 `--chrome` 指定，脚本也会自动查找常见安装路径，
 找不到抛清晰异常。
 
-字体许可由使用者自行负责：请确认所选字体的许可证允许你的使用场景，并按需
-在产出物中附上字体许可声明。
+### 许可
+
+字体许可由使用者自行负责。开源字体（OFL / Apache）商用无虞；系统自带字体（微软雅黑、
+苹方等）随操作系统授权，**用于商业产出前请确认其条款**。`python doctor.py` 会明确告诉你
+当前用的是哪一档、哪一款。
 
 ## 设计理念
 
