@@ -107,15 +107,20 @@ _SYSTEM_CJK = (
 _NOTICE_SHOWN = False
 
 # 找不到字体时的出口：给能直接照做的命令，而不是「去装个字体」。
+# 这两个地址在 _emit_notice 里还要再提一次，所以只在这里定义一遍——
+# 「两处都写一遍并要求同步」本身就是缺陷。
+_NOTO_URL = "https://fonts.google.com/noto/specimen/Noto+Sans+SC"
+_SOURCEHAN_URL = "https://github.com/adobe-fonts/source-han-sans/releases"
+
 _DOWNLOAD_HINT = """\
 去哪儿弄（挑一个，都是开源可商用，SIL OFL 1.1）：
 
   A. Noto Sans SC（单文件，最省事，约 10MB）
-     https://fonts.google.com/noto/specimen/Noto+Sans+SC
+     %s
      页面右上「Download family」→ 解压得到 NotoSansSC-VariableFont_wght.ttf
 
   B. 思源黑体 Source Han Sans（分字重，粗细可控，约 30MB）
-     https://github.com/adobe-fonts/source-han-sans/releases
+     %s
      下 SourceHanSansSC.zip，里面 OTF/ 目录取 Regular 与 Bold
 
   C. 国内网络打不开上面两个：在 Gitee 搜「思源黑体」或「Noto Sans SC」，
@@ -133,7 +138,7 @@ _DOWNLOAD_HINT = """\
      export GZH_IMAGE_KIT_FONT_REG="/绝对路径/NotoSansSC-VariableFont_wght.ttf"
      export GZH_IMAGE_KIT_FONT_BOLD="/绝对路径/同上或另一个粗体文件"
 
-排查完可以跑 `python doctor.py` 复查环境。"""
+排查完可以跑 `python doctor.py` 复查环境。""" % (_NOTO_URL, _SOURCEHAN_URL)
 
 
 def _font_dirs():
@@ -263,7 +268,13 @@ def _system_cjk(bold: bool):
 
 
 def _emit_notice(label: str, lic: str, path: str, no_bold: bool) -> None:
-    """二档命中时提示一次。走 stderr，不污染 stdout 里可被脚本解析的输出。"""
+    """二档命中时提示一次。走 stderr，不污染 stdout 里可被脚本解析的输出。
+
+    这不是「报错」，是「能出图，但换个字体更好」——用户从输出里看不出自己
+    是靠哪份字体出的图，也想不到换台机器图就变了样，所以这里必须把
+    「去装一款开源字体」写成能直接照做的两步，而不是一句「建议装个字体」。
+    进程内只打一次；装了开源/免费字体的人走一档，根本看不到这段。
+    """
     global _NOTICE_SHOWN
     if _NOTICE_SHOWN:
         return
@@ -272,9 +283,12 @@ def _emit_notice(label: str, lic: str, path: str, no_bold: bool) -> None:
         "\n[i] 字体：用的是本机系统字体「%s」\n"
         "    %s\n"
         "    这份字体只在你机器上用，不会随本仓库分发；对外发布前请自行确认授权范围。\n"
-        "    想彻底省心（也方便把图给别人复现）：换一款开源中文字体，"
-        "跑 `python doctor.py` 会告诉你怎么装。\n"
-        "    文件：%s\n" % (label, lic, path))
+        "    文件：%s\n"
+        "\n"
+        "    图能出，但建议换一款开源中文字体——免费商用，换台机器也能出一样的图：\n"
+        "      下载 %s（页面右上 Download family）\n"
+        "      解压后双击 .ttf 安装即可，脚本下次自动认出来，不用配环境变量。\n"
+        "      完整步骤看 `python doctor.py`。\n" % (label, lic, path, _NOTO_URL))
     if no_bold:
         sys.stderr.write(
             "    ⚠ 这份字体没有配对的粗体文件：标题会用常规字重，看起来会偏细。\n"

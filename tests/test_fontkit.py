@@ -149,6 +149,34 @@ def test_falls_back_to_system_font_when_no_open_font(monkeypatch):
         fk._find_font_cached.cache_clear()
 
 
+def test_system_font_notice_actually_says_where_to_download(monkeypatch, capsys):
+    """退到系统字体时那句提示，必须自带下载地址和安装动作。
+
+    外部实测的真实卡点不是「不知道要装字体」，是「知道该装但不知道下哪个」。
+    提示里只写「跑 doctor.py 看看」等于让人多跑一趟命令——
+    这一趟在「别人下载下来第一次出图」的时刻，很容易直接被跳过。
+    """
+    monkeypatch.setattr(fk, "_scan_font_files", lambda: [])
+    monkeypatch.setattr(fk, "_SYSTEM_CJK", (
+        ("C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/msyhbd.ttc",
+         "微软雅黑", "商用需授权", ["Microsoft YaHei", "微软雅黑"]),
+    ))
+    monkeypatch.setattr("os.path.exists", lambda p: True)
+    fk._find_font_cached.cache_clear()
+    fk._NOTICE_SHOWN = False
+    try:
+        fk.font_info(False)
+    finally:
+        fk._find_font_cached.cache_clear()
+    err = capsys.readouterr().err
+
+    assert fk._NOTO_URL in err, "提示里没有下载地址，等于没说去哪弄：\n%s" % err
+    assert "安装" in err, "提示里没说要装（只说了「建议换字体」）：\n%s" % err
+    assert "免费商用" in err, "没点明「免费商用」——这正是用户要不要换的理由：\n%s" % err
+    assert fk._DOWNLOAD_HINT.count(fk._NOTO_URL) == 1, (
+        "同一地址在完整提示里出现多次，说明有第二处硬编码没清掉")
+
+
 if __name__ == "__main__":
     raise SystemExit(
         "用 pytest 跑：python -m pytest tests/ -q\n（本文件不提供自研断言器，"
