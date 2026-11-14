@@ -9,10 +9,10 @@
 
 | 工具 | 用途 | 依赖 |
 |---|---|---|
+| **`render_riso.py`** | **主力出图**：孔版印刷风格贴图引擎，1242×1656 满幅。九种版式自动轮转（错版巨字、半调网点、胶带、引文、大数字…），纸感颗粒 | Pillow + Chrome |
 | `dazi_kit.py` | 3:4 竖版大字报贴图渲染库，字号红线与对比度红线内置为断言 | Pillow |
-| `gen_cards.py` | 长文 draft → 900×1200 竖版贴图卡组（自动拆卡） | Pillow |
-| `gen_diagram.py` | 步骤 / 对比 / 清单 / 阶段 四版式公众号配图，5 套配色 | Pillow |
-| `render_riso.py` | 孔版印刷（Riso）风格贴图引擎：错版、半调网点、纸感颗粒 | Pillow + Chrome |
+| `gen_cards.py` | 长文 draft → 900×1200 竖版贴图卡组（自动拆卡）。**轻量版**：不依赖 Chrome，视觉也比 riso 朴素一档 | Pillow |
+| `gen_diagram.py` | 步骤 / 对比 / 清单 / 阶段 四版式公众号**长文配图**（inside article，不是贴图） | Pillow |
 | `annotate_shot.py` | 截图标注：红框 / 箭头 / 圆圈 / 序号 | Pillow |
 | `check.py` | 产出图体检：字号、对比度、体积、比例、序号、水印 | Pillow |
 | `fontkit.py` | 共享字体入口：`load(size, bold)` 统一取字体并处理可变字体（VF）字重 | Pillow |
@@ -30,25 +30,34 @@ export GZH_IMAGE_KIT_FONT_BOLD=/path/to/SourceHanSansSC-Bold.otf
 #   $env:GZH_IMAGE_KIT_FONT_REG="C:/path/to/SourceHanSansSC-Regular.otf"
 #   $env:GZH_IMAGE_KIT_FONT_BOLD="C:/path/to/SourceHanSansSC-Bold.otf"
 
-python gen_diagram.py --help
+python render_riso.py --spec examples/cards_riso.json --out examples/riso
 ```
+
+`examples/` 里有现成的样张：`examples/riso/`（riso 六张一套，上面这条命令就是重跑它）、
+`examples/cards/`（gen_cards 六张）、`examples/diagram.png`（步骤配图）。
+**先看样张再动手**——这个工具的价值全在视觉上，光看参数看不出差别。
 
 ## 四条常用命令
 
 ```bash
-# 1. 长文 draft → 一整套图卡（6 张 900×1200）
+# 1. 一套贴图（主力，1242×1656，九种版式自动轮转）
+#    cards.json 里每张卡写 tag / head / hero / points / caption；
+#    hero 里可以用 \n 手动指定断点（对仗句、金句必须自己控）
+python render_riso.py --spec examples/cards_riso.json --out out/riso/
+
+# 2. 长文 draft → 图卡组（轻量版，不需要 Chrome，自动拆卡）
 python gen_cards.py --in draft.md --out cards/ --tag AI实操 --account 你的号名 \
   --benefit "全程免费，十分钟上手" --keywords 贴图,排版
 
-# 2. 步骤图（还有 compare / list / stages / ladder 四种版式）
+# 3. 长文正文里的步骤配图（还有 compare / list / stages / ladder 四种版式）
 python gen_diagram.py --mode steps --title "三分钟出一套图" \
   --data "$(cat steps.json)" --style mint --out out/steps.png
 
-# 3. 出完整组图后体检（比例、体积上下限、序号连续、右下角水印）
-python check.py --images cards/
+# 4. 出完整组图后体检（比例、体积上下限、序号连续、右下角水印）
+python check.py --images out/riso/ --channel greenbook
 
-# 4. 查渲染脚本里的字号与文字色对比度
-python check.py --card-fonts gen_cards.py
+# 5. 查渲染脚本里的字号与文字色对比度
+python check.py --card-fonts render_riso.py
 ```
 
 `--out` 指向不存在的目录会自动创建，不用先 mkdir。

@@ -360,6 +360,22 @@ def mint_chip(style: str) -> str:
 
 # ---------------------------------------------------------------- 九种版式
 
+def cover_head(head: str, maxw: int = 470) -> str:
+    """封面左栏标题：能一行放下就一行，放不下才折两行、且两行均衡。
+
+    原来固定 84px，超过 5 个字就在栏宽里硬折，最后一个字孤零零掉到第二行
+    （实测「贴图不是配图」→「贴图不是配 / 图」）。标题是封面第一眼看到的东西，
+    留一个孤字比缩小字号难看得多——所以这里是缩字号，再不行才折。
+    """
+    n = max(len(head), 1)
+    fs = int(min(84, maxw / n))
+    if fs < 64 and n >= 4:
+        per = (n + 1) // 2
+        fs = int(min(76, maxw / per))
+        head = head[:per] + "<br>" + head[per:]
+    return f'<div class="r1-head" style="font-size:{fs}px">{head}</div>'
+
+
 def r1_cover(c: dict) -> str:
     """封面：左栏题签 + 右栏竖排巨字。竖排是中文海报天然的填满法。"""
     hero = c["hero"]
@@ -373,7 +389,7 @@ def r1_cover(c: dict) -> str:
   <div class="r1-no">NO. 01</div>
   <div class="r1-left">
     <div class="r1-kick">{c['tag']}</div>
-    <div class="r1-head">{c['head']}</div>
+    {cover_head(c['head'])}
     <div class="r1-cap">{cap_html(c['caption'], 11)}</div>
     <div class="r1-chip"><i class="chip-in"></i><span>{c.get('badge') or f'{_TOTAL} 张'}</span></div>
   </div>
@@ -451,15 +467,21 @@ def r4_stamp(c: dict) -> str:
 
 
 def r5_quote(c: dict) -> str:
-    """大引文：一枚朱红引号 + 巨号宋体引文 + 分隔线 + 小字。单栏，别再分栏。"""
-    fs = fit(c["hero"], 1010, 178)
+    """大引文：一枚朱红引号 + 巨号引文 + 分隔线 + 小字。单栏，别再分栏。
+
+    引文支持用 \n 手动指定断点：这类卡片字数最多、字号最大，靠浏览器自动折行
+    会把「不是空／是让人喘口气」这种对仗句劈在错的位置，读起来的节奏全丢了。
+    """
+    rows_t = [r for r in (c["hero"] or "").split("\n") if r] or [c.get("hero", "")]
+    fs = fit(max(rows_t, key=len), 1010, 178)
+    quote_html = "".join(f'<div style="font-size:{fs}px">{r}</div>' for r in rows_t)
     return f"""
 <div class="card">
   {crop_marks()}
   <div class="r5-flow">
     <div class="r5-mark">“</div>
     <div class="r5-head">{c['head']}</div>
-    <div class="r5-quote" style="font-size:{fs}px">{c['hero']}</div>
+    <div class="r5-quote">{quote_html}</div>
     <div class="r5-rule"></div>
   </div>
   {foot(c)}
