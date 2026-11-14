@@ -30,14 +30,17 @@ export GZH_IMAGE_KIT_FONT_BOLD=/path/to/SourceHanSansSC-Bold.otf
 #   $env:GZH_IMAGE_KIT_FONT_REG="C:/path/to/SourceHanSansSC-Regular.otf"
 #   $env:GZH_IMAGE_KIT_FONT_BOLD="C:/path/to/SourceHanSansSC-Bold.otf"
 
-python render_riso.py --spec examples/cards_riso.json --out examples/riso
+python render_riso.py --spec examples/cards_riso.json --out out/riso/
 ```
+
+> **`--out` 别写 `examples/`**：那会直接覆盖官方样张，之后就再没有「合格产出长什么样」的
+> 参照物了。输出一律丢到仓库外的 `out/` 或你自己的目录。
 
 `examples/` 里有现成的样张：`examples/riso/`（riso 六张一套，上面这条命令就是重跑它）、
 `examples/cards/`（gen_cards 六张）、`examples/diagram.png`（步骤配图）。
 **先看样张再动手**——这个工具的价值全在视觉上，光看参数看不出差别。
 
-## 四条常用命令
+## 五条常用命令
 
 ```bash
 # 1. 一套贴图（主力，1242×1656，九种版式自动轮转）
@@ -65,6 +68,35 @@ python check.py --card-fonts render_riso.py
 `examples/` 里有完整可复现的输入与产出（含 6 张样张），
 每条命令都能照着跑一遍——见 `examples/README.md`。
 
+## 版式 × 字段对照表
+
+`cards.json` 里每张卡用 `v` 指定版式。**不同版式吃的字段不一样**——配了不吃的字段不会报错，
+只是不会出现在图上。所以先看这张表（由 `python render_riso.py --print-layouts` 生成，
+不要手抄）：
+
+| 版式 | 名称 | tag | head | hero | points | caption | badge |
+|---|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| `r1` | 封面·竖排巨字 | ✓ | ✓ | ✓ | · | ✓ | ✓ |
+| `r2` | 错版大字 | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| `r3` | 网屏圆 | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| `r4` | 朱红印章 | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| `r5` | 大引文 | · | ✓ | ✓ | ✓ | ✓ | · |
+| `r6` | 空心数字 | · | ✓ | ✓ | ✓ | ✓ | · |
+| `r7` | 柠檬纸带 | · | ✓ | ✓ | ✓ | ✓ | · |
+| `r8` | 纸条+胶带 | · | ✓ | ✓ | ✓ | ✓ | · |
+| `r9` | 收尾 | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+
+- `hero` 支持 `\n` 手动断点，**九种版式全部生效**（对仗句、金句必须自己控断点）。
+- `points` 和 `caption` 进的是同一块收口区：有 `points` 出要点，没有才退回 `caption`。
+- `r5`–`r8` 是单栏大字版式，**故意不吃 `tag`**：标签会打断大字。不是 bug。
+- 不写 `v` 时按 `r1…r9` 顺序轮转。
+- 脚本会在渲染前检查一遍，配了不吃的字段会打印 `[!] 第 N 张（r8 纸条+胶带）：配了 tag，但这个版式不渲染它`。
+
+页面品牌串（页眉「X · 图文卡」、页脚「X · 02 / 06」）三个入口，优先级从高到低：
+`--brand 你的号名` > `cards.json` 的 `"brand"` > `"footer"` 里 `·` 前第一段 > 环境变量 `GZH_IMAGE_KIT_BRAND`。
+
+
+
 ## 字体配置与许可
 
 本仓库**不附带任何字体文件**，也不引用不可再分发的系统专有字体。所有出图脚本
@@ -80,7 +112,13 @@ python check.py --card-fonts render_riso.py
 > 否则整套图会悄无声息地全部落在常规字重。
 
 请自备一款**允许再分发 / 商用**的中文字体，推荐思源黑体 Source Han Sans SC
-或 Noto Sans CJK SC（均为 SIL OFL 1.1）。配置方式（优先级从高到低）：
+或 Noto Sans CJK SC（均为 SIL OFL 1.1）。**下载出处**（不联网也能照这个找）：
+
+- Noto Sans CJK：<https://github.com/notofonts/noto-cjk/releases>（选 `Sans` → `OTF` 或 `Variable`）
+- 思源黑体 Source Han Sans：<https://github.com/adobe-fonts/source-han-sans/releases>
+- 国内镜像：Gitee 搜「思源黑体」，或从系统字体目录里找一个 OFL 字体先用着
+
+配置方式（优先级从高到低）：
 
 1. 环境变量 `GZH_IMAGE_KIT_FONT_REG` / `GZH_IMAGE_KIT_FONT_BOLD`：分别指向常规体与
    粗体字体文件的绝对路径。设了但文件不存在会直接报错，不会偷偷换字体。

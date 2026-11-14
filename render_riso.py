@@ -235,6 +235,70 @@ LEMON = "#F0C33C"          # 柠檬纸标签
 # 九张的版式序列。改这里就改整套节奏，别在单张里硬写。
 VARIANT_ORDER = ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"]
 
+# 版式 → (中文名, 真正会被渲染的字段)。
+#
+# 这张表同时是**文档**和**校验器**：`--print-layouts` 用它生成 README 的对照表，
+# 渲染前用它检查「你配了但不会出现在图上的字段」。
+#
+# 为什么要它（2026-11-14 外部实测）：字段行为原来全靠出图后肉眼试错，一个新手
+# 撞到四个坑——r2 吞 tag、r8 不显示 tag、r9 吞 hero 换行、footer/subdir 根本没人读。
+# 四个坑是同一个病：**配置字段静默丢弃**。用户配了、图上没有、也不报错，
+# 他只会以为「这个工具就是这样」，而不是「我写错了」。
+#
+# 字段清单以运行时探测为准（给每个字段一个哨兵串，渲染后看它出不出现），
+# 不是照代码猜的：r5/r6/r7/r8 是单栏大字版式，故意不吃 tag——标签会打断大字。
+LAYOUTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "r1": ("封面·竖排巨字", ("tag", "head", "hero", "caption", "badge")),
+    "r2": ("错版大字", ("tag", "head", "hero", "points", "caption")),
+    "r3": ("网屏圆", ("tag", "head", "hero", "points", "caption")),
+    "r4": ("朱红印章", ("tag", "head", "hero", "points", "caption")),
+    "r5": ("大引文", ("head", "hero", "points", "caption")),
+    "r6": ("空心数字", ("head", "hero", "points", "caption")),
+    "r7": ("柠檬纸带", ("head", "hero", "points", "caption")),
+    "r8": ("纸条+胶带", ("head", "hero", "points", "caption")),
+    "r9": ("收尾", ("tag", "head", "hero", "points", "caption")),
+}
+
+CARD_FIELDS = ("tag", "head", "hero", "points", "caption", "badge")
+
+
+def print_layouts() -> None:
+    """输出 markdown 对照表（README 直接贴这段，别手抄）。"""
+    print("| 版式 | 名称 | tag | head | hero | points | caption | badge |")
+    print("|---|---|:-:|:-:|:-:|:-:|:-:|:-:|")
+    for v, (name, uses) in LAYOUTS.items():
+        cells = " | ".join("✓" if f in uses else "·" for f in CARD_FIELDS)
+        print("| `%s` | %s | %s |" % (v, name, cells))
+    print()
+    print("`hero` 支持用 `\\n` 手动指定断点（九种版式全部生效）。")
+    print("`points` / `caption` 进的是同一块收口区：有 points 出要点，没有才退回 caption。")
+
+
+def check_spec_fields(cards: list[dict]) -> list[str]:
+    """检查「配了但这个版式不渲染」的字段，返回提示语（不中断渲染）。
+
+    比静默丢弃好：用户能知道「不是没生效，是这个版式不用它」，
+    并且知道下一个版式会不会用——不然永远在猜。
+    """
+    out = []
+    for i, c in enumerate(cards):
+        v = c.get("v") or VARIANT_ORDER[i % len(VARIANT_ORDER)]
+        if v not in LAYOUTS:
+            out.append("第 %d 张：版式 %r 不存在（可用 %s）"
+                       % (i + 1, v, " ".join(LAYOUTS)))
+            continue
+        uses = LAYOUTS[v][1]
+        given = [f for f in CARD_FIELDS if c.get(f)]
+        unused = [f for f in given if f not in uses]
+        if unused:
+            out.append("第 %d 张（%s %s）：配了 %s，但这个版式不渲染它"
+                       % (i + 1, v, LAYOUTS[v][0], "、".join(unused)))
+        if not (c.get("hero") or "").strip():
+            out.append("第 %d 张（%s %s）：缺少 hero —— 每张都要有一句大字，"
+                       "它是版式的视觉主体；这张会渲出一片空白"
+                       % (i + 1, v, LAYOUTS[v][0]))
+    return out
+
 KICKERS = ["这一页先记住", "问题就在这", "往下翻", "这句最要紧", "别急着跳"]
 
 
@@ -256,13 +320,34 @@ def split_rows(text: str, rows: int) -> list[str]:
     return out[:rows]
 
 
-def hero_rows(text: str) -> list[str]:
-    """7 字以内排一行（够大、不断词）；更长才折两行。
+def hero_of(c: dict) -> str:
+    """取 hero，缺了给空串。
 
+    缺字段应该在 check_spec_fields 里被指名报出来，而不是在渲染时抛
+    `KeyError: 'hero'` 一整屏栈——2026-11-14 边界测试就是「只写 head 不写 hero」
+    把整个渲染打断了。崩溃的信息量比一句「第 1 张缺少 hero」低得多。
+    """
+    return str(c.get("hero") or "")
+
+
+def hero_rows(text: str) -> list[str]:
+    """把人写的 hero 拆成行：先认 \n，再按 7 字 / 空格规则自动切。
+
+    **\n 优先**（2026-11-14 外部实测补）：作者写了 `\n` 就是明确说了「这里断」，
+    自动切法再聪明也不该覆盖它。原来只有部分版式认 \n、r2/r4/r6/r7/r9 全吞掉，
+    同一份配置换个版式断点就变——这是「字段行为随版式漂移」，最难排查的一类。
+    所以收口在 hero_rows 一处，所有走它的版式统一生效。
+
+    7 字以内排一行（够大、不断词）；更长才折两行。
     **英文/数字连写不劈**（2026-11-11 实测）：按字数均分会把 "Qoder 登录" 劈成
     「Qode / r 登录」——本号全是 AI 题材，模型名一断，读者第一眼就卡住。
     所以有空格就优先按空格切，取最均衡的那个切点。
     """
+    if "\n" in text:
+        rows = [r.strip() for r in text.split("\n")]
+        rows = [r for r in rows if r]
+        if rows:
+            return rows
     if len(text) <= 7:
         return [text]
     words = text.split(" ")
@@ -342,6 +427,35 @@ _TOTAL = 9
 _BRAND = os.environ.get("GZH_IMAGE_KIT_BRAND", "图卡工具箱")
 
 
+def apply_brand(spec: dict, cli_brand: str = "") -> str:
+    """决定页眉页脚用的品牌串，写回全局 _BRAND。
+
+    优先级：`--brand` > `cards.json` 的 `brand` > `footer` 的首段 > 环境变量 > 默认。
+
+    为什么要处理 footer：它原来是个「写了但没人读」的字段（2026-11-14 外部实测发现：
+    配了 `"footer": "图卡实测 · W1"`，出图还是「图卡工具箱」）。但也不能直接拿来用——
+    footer 是「AI澎 · 公众号」这种整串，而品牌串会被拼进「{brand} · 图文卡」
+    和「{brand} · 02 / 07」，整串拼进去就成了「AI澎 · 公众号 · 02 / 07」，太长。
+    所以 footer 只取 · 前的第一段当品牌名，并明确告诉用户发生了什么。
+    """
+    global _BRAND
+    if cli_brand.strip():
+        _BRAND = cli_brand.strip()
+        return _BRAND
+    b = (spec.get("brand") or "").strip()
+    if b:
+        _BRAND = b
+        return _BRAND
+    f = (spec.get("footer") or "").strip()
+    if f:
+        _BRAND = f.split("·")[0].strip()
+        print("[i] cards.json 的 footer=%r 已按品牌名使用：%r"
+              "（页脚会拼成「{brand} · 02/06」，所以只取 · 前第一段；"
+              "想换名字请写 \"brand\"）" % (f, _BRAND))
+        return _BRAND
+    return _BRAND          # 模块默认（环境变量或「图卡工具箱」）
+
+
 def folio(no: int, total: int | None = None) -> str:
     """页脚页码，杂志式，右下。total 默认取本次实际张数。"""
     total = _TOTAL if total is None else total
@@ -378,14 +492,14 @@ def cover_head(head: str, maxw: int = 470) -> str:
 
 def r1_cover(c: dict) -> str:
     """封面：左栏题签 + 右栏竖排巨字。竖排是中文海报天然的填满法。"""
-    hero = c["hero"]
+    hero = hero_of(c)
     # 竖排中连续数字要合占一格（縦中横），否则「96」会被拆成上下两个字符
     hero_html = re.sub(r"(\d{2,})", r'<span class="tcy">\1</span>', hero)
     fs = int(min(250, 1150 / max(len(hero), 1) / 1.12))
     return f"""
 <div class="card">
   {crop_marks()}
-  <div class="mast">{_BRAND} · 图文卡</div>
+  <div class="mast">图文卡</div>
   <div class="r1-no">NO. 01</div>
   <div class="r1-left">
     <div class="r1-kick">{c['tag']}</div>
@@ -402,8 +516,15 @@ def r1_cover(c: dict) -> str:
 
 def r2_overprint(c: dict, seq: int) -> str:
     """错版大字：朱红版整体偏右下，黑版压上。两张版没对准，才是印出来的。"""
-    rows_t = hero_rows(c["hero"])
+    rows_t = hero_rows(hero_of(c))
     fs = fit(max(rows_t, key=len), 1060, 252)
+    # 字号地板（2026-11-14 边界测试实测）：30+ 字的长句被压到 70px，错版两层咬在一起
+    # 完全读不出。低于 96px 就增加行数——多一行远比一小团红黑重影好。
+    if fs < 96 and len(hero_of(c)) > 7:
+        per = max(4, int(1060 // 96))
+        plain = hero_of(c).replace("\n", "")
+        rows_t = [plain[i:i + per] for i in range(0, len(plain), per)]
+        fs = fit(max(rows_t, key=len), 1060, 252)
     rows = "".join(
         f'<div class="reg" style="font-size:{fs}px;margin-bottom:10px">'
         f'<span class="reg-red">{r}</span><span class="reg-ink">{r}</span></div>'
@@ -411,7 +532,7 @@ def r2_overprint(c: dict, seq: int) -> str:
     return f"""
 <div class="card">
   {crop_marks()}
-  <div class="r2-kicker">{KICKERS[seq % len(KICKERS)]}</div>
+  <div class="r2-kicker">{c.get('tag') or KICKERS[seq % len(KICKERS)]}</div>
   <div class="r2-rule"></div>
   <div class="r2-flow">
     <div class="r2-head">{c['head']}</div>
@@ -426,9 +547,10 @@ def r2_overprint(c: dict, seq: int) -> str:
 
 def r3_screen(c: dict) -> str:
     """网屏圆：右侧一枚朱红网点大圆，左侧竖排题签，字压在圆上。"""
-    fs = fit(c["hero"], 830, 226)
+    rows_t = hero_rows(hero_of(c))
+    fs = fit(max(rows_t, key=len), 830, 226)
     rows = "".join(f'<div style="font-size:{fs}px">{r}</div>'
-                   for r in hero_rows(c["hero"]))
+                   for r in rows_t)
     return f"""
 <div class="card">
   {crop_marks()}
@@ -445,7 +567,7 @@ def r3_screen(c: dict) -> str:
 
 def r4_stamp(c: dict) -> str:
     """印章：朱红双线方章斜盖在右上，正文从章下压过来。"""
-    rows_t = hero_rows(c["hero"])
+    rows_t = hero_rows(hero_of(c))
     fs = fit(max(rows_t, key=len), 1010, 244)
     rows = "".join(f'<div style="font-size:{fs}px">{r}</div>' for r in rows_t)
     seal_fs = min(46, int(206 / max(len(c["head"]), 1)))
@@ -472,7 +594,7 @@ def r5_quote(c: dict) -> str:
     引文支持用 \n 手动指定断点：这类卡片字数最多、字号最大，靠浏览器自动折行
     会把「不是空／是让人喘口气」这种对仗句劈在错的位置，读起来的节奏全丢了。
     """
-    rows_t = [r for r in (c["hero"] or "").split("\n") if r] or [c.get("hero", "")]
+    rows_t = [r for r in (hero_of(c) or "").split("\n") if r] or [c.get("hero", "")]
     fs = fit(max(rows_t, key=len), 1010, 178)
     quote_html = "".join(f'<div style="font-size:{fs}px">{r}</div>' for r in rows_t)
     return f"""
@@ -493,9 +615,10 @@ def r5_quote(c: dict) -> str:
 
 def r6_bignum(c: dict, seq: int) -> str:
     """空心数字：朱红描边数字当水印铺底，字压在上面，像套印两层。"""
-    fs = fit(c["hero"], 1010, 238)
+    rows_t = hero_rows(hero_of(c))
+    fs = fit(max(rows_t, key=len), 1010, 238)
     rows = "".join(f'<div style="font-size:{fs}px">{r}</div>'
-                   for r in hero_rows(c["hero"]))
+                   for r in rows_t)
     return f"""
 <div class="card">
   {crop_marks()}
@@ -510,9 +633,9 @@ def r6_bignum(c: dict, seq: int) -> str:
 
 def r7_band(c: dict) -> str:
     """柠檬纸带斜切横穿：黑字压在带上，带外是纸。"""
-    fs = fit(max(hero_rows(c["hero"]), key=len), 1040, 226)
+    fs = fit(max(hero_rows(hero_of(c)), key=len), 1040, 226)
     rows = "".join(f'<div style="font-size:{fs}px">{r}</div>'
-                   for r in hero_rows(c["hero"]))
+                   for r in hero_rows(hero_of(c)))
     return f"""
 <div class="card">
   {crop_marks()}
@@ -528,18 +651,20 @@ def r7_band(c: dict) -> str:
 
 def r8_tape(c: dict) -> str:
     """纸条 + 胶带：一张白纸条斜贴，两头压胶带。"""
-    fs = fit(max(hero_rows(c["hero"]), key=len), 900, 214)
+    fs = fit(max(hero_rows(hero_of(c)), key=len), 900, 214)
     rows = "".join(f'<div style="font-size:{fs}px">{r}</div>'
-                   for r in hero_rows(c["hero"]))
+                   for r in hero_rows(hero_of(c)))
     return f"""
 <div class="card">
   {crop_marks()}
-  <div class="r8-head">{c['head']}</div>
-  <div class="r8-strip">
-    <div class="r8-tape-l"></div><div class="r8-tape-r"></div>
-    <div class="r8-text">{rows}</div>
+  <div class="r8-flow">
+    <div class="r8-head">{c['head']}</div>
+    <div class="r8-strip">
+      <div class="r8-tape-l"></div><div class="r8-tape-r"></div>
+      <div class="r8-text">{rows}</div>
+    </div>
+    {foot(c)}
   </div>
-  {foot(c)}
   {halftone("r8-dots")}
   {mint_chip("left:80px; bottom:26px; width:952px; height:34px;")}
   {folio(8)}
@@ -553,14 +678,18 @@ def r9_end(c: dict) -> str:
     「页码 04 / 04」直接印在网点上。收尾页的设计本来就是留白，
     这块网点既与文字相交、又不承载信息，按 §10.6 判据（去掉后信息量不变）直接去掉。
     """
-    fs = fit(c["hero"], 980, 158)
+    # 收尾页也是「一行大字」，一样要认 \n：2026-11-14 外部实测发现 r9 吞换行，
+    # 「只读第一行\n知道下周干嘛吗」被挤成一行、字号被压小，反而比两行更难看。
+    rows_t = [r for r in (hero_of(c) or "").split("\n") if r] or [c.get("hero", "")]
+    fs = fit(max(rows_t, key=len), 980, 158)
+    hero_html = "".join(f'<div style="font-size:{fs}px">{r}</div>' for r in rows_t)
     return f"""
 <div class="card">
   {crop_marks()}
   <div class="r9-flow">
     <div class="r9-kick">{c['tag']}</div>
     <div class="r9-head">{c['head']}</div>
-    <div class="r9-hero" style="font-size:{fs}px">{c['hero']}</div>
+    <div class="r9-hero">{hero_html}</div>
     <div class="r9-rule"></div>
   </div>
   {foot(c)}
@@ -629,7 +758,9 @@ body{background:#fff;-webkit-font-smoothing:antialiased}
 
 /* 双色错版 */
 .reg{position:relative;line-height:.96;letter-spacing:-6px;white-space:nowrap}
-.reg-red{position:absolute;left:9px;top:8px;color:#E8422E;mix-blend-mode:multiply}
+.reg-red{position:absolute;left:.045em;top:.04em;color:#E8422E;mix-blend-mode:multiply}
+/* 偏移必须跟着字号走（2026-11-14 边界测试）：原来写死 9px/8px，是给 ~200px 大字调的；
+   长金句把字号压到 70px 时，9px 的相对位移就过大，红黑两层互相咬，整行糊成一团。 */
 .reg-ink{position:relative;color:#111111;font-family:var(--f-body);font-weight:700}
 
 /* ---- r1 封面 ---- */
@@ -678,7 +809,7 @@ body{background:#fff;-webkit-font-smoothing:antialiased}
 .r3-vline{position:absolute;left:204px;top:150px;width:4px;height:1230px;background:#111111;opacity:.82}
 .r3-side{position:absolute;left:96px;top:196px;height:1160px;writing-mode:vertical-rl;
   font-family:var(--f-title);font-weight:700;font-size:52px;letter-spacing:9px;color:#111111}
-.r3-kick{position:absolute;left:252px;top:152px;font-size:42px;letter-spacing:9px;color:#E8422E}
+.r3-kick{position:absolute;left:252px;top:152px;font-size:42px;letter-spacing:9px;color:#5c5c5c}
 .r3-body{position:absolute;left:252px;bottom:600px;line-height:1.02;letter-spacing:-4px;
   color:#111111;font-family:var(--f-body);font-weight:700}
 .r3-rule{display:none}   /* 2026-11-11 删除：绝对定位 bottom:480，压在第一条要点上 */
@@ -736,9 +867,15 @@ body{background:#fff;-webkit-font-smoothing:antialiased}
 .r7-dots{right:-80px;top:110px;width:300px;height:300px;border-radius:50%;opacity:.45}
 
 /* ---- r8 纸条胶带 ---- */
-.r8-head{position:absolute;left:76px;top:176px;font-size:62px;font-family:var(--f-title);
+/* 2026-11-14 外部评审指出「05 张纸条下方约 1/3 屏纯空、说明小字吊底，像图没加载完」。
+   根因：head/strip 锚在 top:400，foot 锚在 bottom:170，两块各自固定，内容一少中间就裂开。
+   改为一个 flow 容器垂直居中：内容少时整体居中，不再留一块谁都不占的空。 */
+.r8-flow{position:absolute;left:106px;top:250px;width:1030px;height:1220px;
+  display:flex;flex-direction:column;justify-content:center;gap:86px}
+.r8-flow .foot{position:static;left:auto;bottom:auto;width:auto;margin-left:-26px}
+.r8-head{font-size:62px;font-family:var(--f-title);
   font-weight:700;color:#111111;letter-spacing:5px;max-width:1060px;line-height:1.32}
-.r8-strip{position:absolute;left:106px;top:400px;width:1030px;padding:78px 66px;
+.r8-strip{width:1030px;padding:78px 66px;
   background:#FFFDF7;transform:rotate(-1.6deg);
   box-shadow:16px 18px 0 rgba(17,17,17,.09)}
 .r8-tape-l{position:absolute;left:-48px;top:-30px;width:190px;height:66px;
@@ -858,13 +995,25 @@ def add_grain(img: Image.Image, sigma: int = 9, mix: float = 0.032) -> Image.Ima
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--spec", required=True, help="cards.json 路径")
-    ap.add_argument("--out", required=True, help="输出目录（可中文）")
+    ap.add_argument("--print-layouts", action="store_true",
+                    help="输出「版式 × 字段」对照表（markdown）后退出，不出图")
+    ap.add_argument("--spec", help="cards.json 路径")
+    ap.add_argument("--out", default="", help="输出目录（可中文）")
     ap.add_argument("--no-grain", action="store_true")
+    ap.add_argument("--brand", default="",
+                    help="页眉页脚用的号名，如「你的号名」；会拼成「{brand} · 图文卡」"
+                         "「{brand} · 02 / 06」。不传则读 cards.json 的 brand/footer，"
+                         "再退到环境变量 GZH_IMAGE_KIT_BRAND")
     ap.add_argument("--chrome", default="",
                     help="Chrome/Chromium 可执行文件绝对路径；默认读环境变量 "
                          "CHROME_PATH 并自动查找常见安装路径")
     a = ap.parse_args()
+
+    if a.print_layouts:
+        print_layouts()
+        return
+    if not a.spec:
+        ap.error("缺少 --spec（或用 --print-layouts 只看对照表）")
 
     global CHROME
     CHROME = resolve_chrome(a.chrome)
@@ -875,6 +1024,12 @@ def main():
     spec = json.loads(Path(a.spec).read_text(encoding="utf-8"))
     cards = spec["cards"]
     name = spec.get("theme", "cards")
+    # 品牌串必须在 build_html 之前定下来：mast/folio 在拼 HTML 时就把 _BRAND 用掉了。
+    apply_brand(spec, a.brand)
+    # 字段体检要在渲染前：字段被静默丢弃时，用户看图只会以为「工具就长这样」，
+    # 不会想到是自己写错了字段名或选错了版式。
+    for w in check_spec_fields(cards):
+        print("[!] " + w)
     os.makedirs(a.out, exist_ok=True)
 
     # 字体守卫生效点在「渲染前」：图一旦出来，字体错了只能重来。
