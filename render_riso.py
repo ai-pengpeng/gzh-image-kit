@@ -286,8 +286,12 @@ def print_layouts() -> None:
         cells = " | ".join("✓" if f in uses else "·" for f in CARD_FIELDS)
         print("| `%s` | %s | %s |" % (v, name, cells))
     print()
-    print("`hero` 支持用 `\\n` 手动指定断点（九种版式全部生效）。")
+    print("`hero` 支持用 `\\n` 手动指定断点：横向版式断行、`r1` 竖排断**列**（从右往左读）。")
     print("`points` / `caption` 进的是同一块收口区：有 points 出要点，没有才退回 caption。")
+    print("题签颜色是有意的层级：`r1` 封面用朱红（全套唯一强调色），内页一律灰——")
+    print("内页要收敛，让巨字当主角。不是不统一。")
+    print("`subdir` 是 `render_cards.py`（另一款卡片引擎）的输出子目录，本引擎不读；")
+    print("同一个 cards.json 被两个引擎共用，所以它合法。")
 
 
 def check_spec_fields(cards: list[dict], spec: dict | None = None) -> list[str]:
@@ -634,11 +638,26 @@ def cover_head(head: str, maxw: int = 470) -> str:
 
 
 def r1_cover(c: dict) -> str:
-    """封面：左栏题签 + 右栏竖排巨字。竖排是中文海报天然的填满法。"""
-    hero = hero_of(c)
+    """封面：左栏题签 + 右栏竖排巨字。竖排是中文海报天然的填满法。
+
+    `\n` 在竖排里 = 换一列（2026-11-14 外部实测补）。原来这里把 hero 原样塞进
+    HTML，`\n` 被浏览器折叠成空格，于是同一份配置在 r1 断点失效、在其余八款生效，
+    而 README 写的是「九种版式全部生效」——**文档承诺与实现对不上**，
+    比不承诺更糟：用户会以为是自己写错了。
+    这里只认**显式** \n，不做自动拆分：r1 的竖排靠缩字号解决长度，
+    自动拆列会和「竖排巨字」的版式意图打架。
+    """
+    raw = hero_of(c)
+    cols = [x.strip() for x in raw.split("\n") if x.strip()] or [raw]
+    longest = max(cols, key=len)
+    # 字号受三个约束：单列高度、列数占用的横向空间、上限 250px
+    fs = int(min(250,
+                 1150 / max(len(longest), 1) / 1.12,
+                 520 / max(len(cols), 1) / 1.12))
+    fs = max(fs, 56)          # 兜底：宁可略挤，也别小到看不清
     # 竖排中连续数字要合占一格（縦中横），否则「96」会被拆成上下两个字符
-    hero_html = re.sub(r"(\d{2,})", r'<span class="tcy">\1</span>', hero)
-    fs = int(min(250, 1150 / max(len(hero), 1) / 1.12))
+    hero_html = "<br>".join(
+        re.sub(r"(\d{2,})", r'<span class="tcy">\1</span>', col) for col in cols)
     return f"""
 <div class="card">
   {crop_marks()}
