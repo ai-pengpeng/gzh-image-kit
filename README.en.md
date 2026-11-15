@@ -4,6 +4,8 @@
 
 Type-safe by geometry, not by vibes: font sizes are computed against the target screen, contrast is checked against WCAG, and the same input always produces the same image. No API keys, no accounts, no network.
 
+![Sample output: risograph cover, misregistered display type, pull quote, step diagram](docs/preview.jpg)
+
 > Status: **v0.1**. Extracted from a real, daily-running publishing pipeline and de-branded. Samples in `examples/`, full rationale in `docs/配图标准.md` (Chinese).
 >
 > 中文说明见 [README.md](README.md)。
